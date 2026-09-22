@@ -1,0 +1,3 @@
+Name,Description,Business owner,Status,Location,Data Stored,Key processes supported,Applicable regulations,Key,Other Fields ,Master Control Framework
+IAM System,We use XYZ to monitor the Identity of users.,,Open,Sydney HQ,Personally Identifiable Information (PII);Non-PII Employee & HR Information,Identify users;Authenticate users;Authorise users,GDPR;CCPA,Yes,,AU-2(0)-5;AU-3(0)-0;
+CRM,Customer Relationship Management ,,Archived,Sydney HQ,Personally Identifiable Information (PII); Marketing and Communications,Sales;Marketing,GDPR;California Privacy Act,No,RTO: 24 Hours;Note: Assessment 2024,AU-2(0)-0;AU-3(0)-0;

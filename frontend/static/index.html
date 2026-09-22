@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CyberHQ GRC Data Migration Tool</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>CyberHQ GRC Data Migration Tool</h1>
+    <p>Map customer spreadsheets into CyberHQ import templates. Nothing is written until you approve it.</p>
+  </header>
+
+  <main>
+    <!-- STEP 1: Upload -->
+    <section class="card" id="upload-panel">
+      <h2>1. Upload a customer spreadsheet</h2>
+      <p>Accepts .csv or .xlsx. Risk/issue registers, control or vendor lists, key business systems, etc.</p>
+      <input type="file" id="file-input" accept=".csv,.xlsx,.xlsm" />
+      <button id="upload-btn">Upload</button>
+      <div id="upload-status"></div>
+    </section>
+
+    <!-- STEP 2: Pick sheet -->
+    <section class="card hidden" id="sheet-panel">
+      <h2>2. Choose the sheet to migrate</h2>
+      <div class="sheet-picker" id="sheet-picker"></div>
+    </section>
+
+    <!-- STEP 3: Mapping review -->
+    <section class="card hidden" id="mapping-panel">
+      <h2>3. Review the proposed mapping</h2>
+      <div id="mapping-banner"></div>
+
+      <div class="field-group">
+        <label>Target CyberHQ template</label>
+        <select id="template-select"></select>
+        <button class="secondary" id="reclassify-btn">Re-run suggestions against this template</button>
+      </div>
+
+      <table id="mapping-table">
+        <thead>
+          <tr>
+            <th>Source column</th>
+            <th>Sample values</th>
+            <th>Maps to</th>
+            <th>Format</th>
+            <th>Confidence &amp; why</th>
+          </tr>
+        </thead>
+        <tbody id="mapping-tbody"></tbody>
+      </table>
+
+      <div class="field-group" style="margin-top:1rem;">
+        <label>If a source column is left unmapped, send its value to this catch-all field (optional)</label>
+        <select id="catchall-select"><option value="">— drop unmapped columns instead (you'll be asked to confirm) —</option></select>
+      </div>
+
+      <button id="export-btn">Generate CyberHQ import CSV</button>
+      <div id="export-status"></div>
+    </section>
+
+    <!-- STEP 4: Confirm drops -->
+    <section class="card hidden" id="drop-confirm-panel">
+      <h2>Some columns aren't mapped anywhere</h2>
+      <p>These source columns have no target field and no catch-all selected. Nothing is dropped without your say-so:</p>
+      <ul id="drop-list"></ul>
+      <button id="confirm-drop-btn">Yes, drop these and export</button>
+      <button class="secondary" id="cancel-drop-btn">Go back and map them instead</button>
+    </section>
+
+    <footer class="note">
+      Data integrity: values are only ever moved or reformatted (dates, list delimiters, case) — never invented,
+      guessed, or silently changed. Every column is either mapped, routed to a catch-all field, or explicitly
+      confirmed as dropped by you before the CSV is created.
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

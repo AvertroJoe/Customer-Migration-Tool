@@ -1,0 +1,2 @@
+Risk ID,Name,Description,Status,Treatment,Priority,Inherent Likelihood,Inherent Impact,Residual Likelihood,Residual Impact,Financial Impact,Due Date,Owner,Risk Categories,Risk Source
+RISK-0001,Unpatched internet-facing servers,Several internet-facing servers are running operating systems past their vendor support window.,ACTIVE,MITIGATE,HIGH,4,4,3,3,150000,15/08/2026,security.lead@example.com,Technology;Third Party,Internal Audit

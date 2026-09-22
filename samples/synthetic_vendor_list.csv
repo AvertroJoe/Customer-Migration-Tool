@@ -1,0 +1,3 @@
+Vendor,Location/HQ,What they do,Sector,Primary Contact,Email,Risk Tier,Internal/External,Staff Count,Data they see,Can they access our network?,Can they access our offices?,Notes
+Cloudy SaaS Ltd,"London, UK",Cloud hosting provider for our core platform.,Technology,Sarah Jones,sarah.jones@cloudysaas.com,High,External,250,"Customer PII, billing data",Yes,No,Contract renews March 2027
+Acme Cleaning Co,"Manchester, UK",Office cleaning services,Facilities,Tom Reid,tom@acmecleaning.co.uk,Low,External,40,,No,Yes,

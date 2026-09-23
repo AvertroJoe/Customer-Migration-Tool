@@ -15,10 +15,14 @@ from app.template_registry import TemplateSchema
 
 from .shared import (
     COLUMN_MAPPING_SCHEMA,
+    CONTENT_RECOMMENDATION_SCHEMA,
     SYSTEM_PROMPT,
     TEMPLATE_SUGGESTION_SCHEMA,
+    VALUE_CROSSWALK_SCHEMA,
+    build_content_recommendation_prompt,
     build_mapping_prompt,
     build_template_suggestion_prompt,
+    build_value_crosswalk_prompt,
 )
 
 LABEL = "Gemini (Google)"
@@ -83,6 +87,28 @@ def suggest_template(
     model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
     user_prompt = build_template_suggestion_prompt(sheet_name, source_columns, sample_rows, candidate_templates)
     return _call_structured(SYSTEM_PROMPT, user_prompt, TEMPLATE_SUGGESTION_SCHEMA, model)
+
+
+def match_column_values(
+    field_name: str,
+    allowed_values: list[str],
+    candidates: list[str],
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_value_crosswalk_prompt(field_name, allowed_values, candidates)
+    return _call_structured(SYSTEM_PROMPT, user_prompt, VALUE_CROSSWALK_SCHEMA, model)
+
+
+def recommend_from_content(
+    field_name: str,
+    allowed_values: list[str],
+    row_contents: list[str],
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_content_recommendation_prompt(field_name, allowed_values, row_contents)
+    return _call_structured(SYSTEM_PROMPT, user_prompt, CONTENT_RECOMMENDATION_SCHEMA, model)
 
 
 def test_key(api_key: str) -> None:

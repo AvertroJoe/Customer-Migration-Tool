@@ -12,10 +12,14 @@ from app.template_registry import TemplateSchema
 
 from .shared import (
     COLUMN_MAPPING_SCHEMA,
+    CONTENT_RECOMMENDATION_SCHEMA,
     SYSTEM_PROMPT,
     TEMPLATE_SUGGESTION_SCHEMA,
+    VALUE_CROSSWALK_SCHEMA,
+    build_content_recommendation_prompt,
     build_mapping_prompt,
     build_template_suggestion_prompt,
+    build_value_crosswalk_prompt,
 )
 
 LABEL = "Claude (Anthropic)"
@@ -33,6 +37,18 @@ TEMPLATE_SUGGESTION_TOOL = {
     "name": "submit_template_suggestion",
     "description": "Submit which CyberHQ template best fits this sheet.",
     "input_schema": TEMPLATE_SUGGESTION_SCHEMA,
+}
+
+VALUE_CROSSWALK_TOOL = {
+    "name": "submit_value_matches",
+    "description": "Submit the best allowed-value match for each candidate value.",
+    "input_schema": VALUE_CROSSWALK_SCHEMA,
+}
+
+CONTENT_RECOMMENDATION_TOOL = {
+    "name": "submit_content_recommendations",
+    "description": "Submit the best allowed-value recommendation for each row.",
+    "input_schema": CONTENT_RECOMMENDATION_SCHEMA,
 }
 
 
@@ -93,6 +109,28 @@ def suggest_template(
     model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
     user_prompt = build_template_suggestion_prompt(sheet_name, source_columns, sample_rows, candidate_templates)
     return _call_tool(SYSTEM_PROMPT, user_prompt, TEMPLATE_SUGGESTION_TOOL, model)
+
+
+def match_column_values(
+    field_name: str,
+    allowed_values: list[str],
+    candidates: list[str],
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_value_crosswalk_prompt(field_name, allowed_values, candidates)
+    return _call_tool(SYSTEM_PROMPT, user_prompt, VALUE_CROSSWALK_TOOL, model)
+
+
+def recommend_from_content(
+    field_name: str,
+    allowed_values: list[str],
+    row_contents: list[str],
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_content_recommendation_prompt(field_name, allowed_values, row_contents)
+    return _call_tool(SYSTEM_PROMPT, user_prompt, CONTENT_RECOMMENDATION_TOOL, model)
 
 
 def test_key(api_key: str) -> None:

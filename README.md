@@ -43,7 +43,11 @@ applying one - see `launcher/bootstrap.py` if you want the details.
    Every suggestion is editable: remap any column, choose a format conversion (date format,
    list delimiter, case), route leftover columns to a catch-all field, or leave columns
    unmapped.
-6. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
+6. **Confirm constrained-field values** - see "Constrained-field value mapping" below. Some
+   CyberHQ fields (Status, Priority, ...) only accept a fixed set of values; this step
+   translates what's actually in the source data into one of those, with the reviewer
+   confirming every value.
+7. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
    with nowhere to go, the tool stops and makes you explicitly confirm it should be dropped -
    it never discards data silently.
 
@@ -62,6 +66,35 @@ the reviewer sees a preview of the top of the sheet with the guessed row highlig
 either confirms it or clicks a different row (`POST /api/sessions/{id}/set-header`). This
 follows the same human-confirms-the-guess pattern as template selection, for the same
 reason: a wrong guess here would be a wrong guess in every single row of the export.
+
+## Constrained-field value mapping
+
+Column mapping alone isn't enough for fields like `Status` or `Priority` - CyberHQ only
+accepts a fixed set of values for these, and a source column's actual values (e.g. a
+customer's own `State` column with values like "Review"/"Respond") often don't match that
+vocabulary at all. Copying them through unchanged would produce an invalid import. The
+allowed values themselves are confirmed, hardcoded data (`template_registry.py`'s
+`ALLOWED_VALUES`) - the tool never invents what CyberHQ's picklists are.
+
+Three mechanisms, chosen automatically per field based on whether it's mapped:
+- **Mapped to a source column**: every distinct value actually present gets a proposed
+  translation to the closest allowed value, with confidence and rationale
+  (`POST /api/sessions/{id}/crosswalk-values`) - the reviewer confirms or changes each one.
+  A value with no reasonable match is left as `null` (flagged, not forced) rather than
+  guessed.
+- **Unmapped, but the field genuinely needs a per-row answer** (currently `Risk Categories`
+  and `Issue Type`): a "Recommend from content" action classifies each row individually from
+  its own title/description text (`POST /api/sessions/{id}/recommend-from-content`), using
+  whichever source columns are already mapped to those descriptive fields.
+- **Unmapped, everything else**: the reviewer can set one default value applied to every
+  row (never a silent default - always an explicit choice, with an extra warning shown for
+  numeric-range fields like Likelihood/Impact, since defaulting those writes the same score
+  into every row).
+
+A value that's approved for translation but doesn't match anything is still passed through
+unchanged at export time - never silently dropped - and shows up as a warning
+(`exporter.py`'s `build_export` return value) so it's visible after export, not just during
+review.
 
 ## Data integrity, by design
 
@@ -195,14 +228,28 @@ be added the same way as they're supplied.
   the classifier will flag these as low-confidence/no-match rather than guess, and they need
   manual correction in the review table today. Worth revisiting once we see how often real
   customer data needs this.
-- **No sample customer spreadsheets have been tested against this yet** - the pipeline has
-  been verified end-to-end with a synthetic example (`samples/synthetic_vendor_list.csv`).
-  Real customer files, especially messier or multi-sheet ones, will surface edge cases the
-  classifier prompt and exporter don't yet handle gracefully.
-- Sessions are held in memory and are lost on server restart - fine for a single migration
-  sitting, not a durable store. Re-upload if the server restarts mid-review.
-- Single-user local tool as it stands - each person on the team runs their own instance. No
-  auth, no multi-user session isolation beyond the session ID.
+- **Only one real customer file tested so far** (the issue register in #3) - the pipeline
+  has been verified end-to-end against it and against a synthetic example
+  (`samples/synthetic_vendor_list.csv`), but the other four structural templates and
+  genuinely messy shapes (multi-sheet, merged cells, duplicate headers) haven't been tried
+  against real files yet.
+- **Constrained-field value mapping's content-recommendation path has no batching** (see
+  "Constrained-field value mapping" above) - one call per sheet, curated to just the
+  relevant title/description columns rather than a full row dump, but still unbounded in row
+  count. On a sheet with many rows this could reach the same order-of-magnitude prompt size
+  that already caused Gemini 503s on full `-flash`/`-pro` tiers - a known risk, not yet hit
+  in practice, not yet mitigated with chunking.
+- **Entity's `Data Accessed 1/2` and `Stored Data Location 1/2`** don't have confirmed
+  allowed values yet, so they get no crosswalk/default treatment - deferred until those
+  lists are finalised.
+- **Master Control Framework crosswalk fields** (KBS, resource) aren't covered by
+  constrained-field value mapping - matching a customer's framework codes to CyberHQ's is a
+  different, harder problem (see the maturity-assessment issue above), not a simple picklist.
+- Sessions are in-memory only, by design - this is a single-user, single-sitting local tool,
+  not a shared/persistent service, so nothing is lost that matters (re-upload if the server
+  restarts mid-review). Same reasoning for no auth: each person runs their own local
+  instance and brings their own key. If that ever needs to change (a shared/hosted
+  instance), that's its own, deliberately separate decision - not something to solve here.
 
 ## Project layout
 
@@ -210,14 +257,15 @@ be added the same way as they're supplied.
 backend/app/
   main.py               FastAPI app + routes (settings, upload, classify, export)
   settings.py           Reads/writes .env for LLM provider + API key (see "LLM provider settings")
-  template_registry.py  Scans templates/, builds the target schema for each one
+  template_registry.py  Scans templates/, builds the target schema for each one - also holds
+                         ALLOWED_VALUES/DELIMITED_FIELDS/CONTENT_RECOMMEND_FIELDS/CONTENT_FIELDS
   ingestion.py           Reads uploaded csv/xlsx as raw rows, guesses + builds the header row
   state.py               In-memory session store (raw rows until header confirmed, then a DataFrame)
   services/
-    classifier.py         Picks the configured provider and asks it to classify + propose a mapping
-    exporter.py            Builds the final CSV from an approved mapping
+    classifier.py         Picks the configured provider and asks it to classify/suggest/match/recommend
+    exporter.py            Builds the final CSV from an approved mapping + constrained-value choices
     providers/
-      shared.py             Provider-agnostic prompt + output schema (the actual data-integrity rules)
+      shared.py             Provider-agnostic prompts + output schemas (the actual data-integrity rules)
       anthropic_provider.py Claude backend
       gemini_provider.py    Gemini backend
 templates/               CyberHQ's own CSV/xlsx import templates (source of truth)

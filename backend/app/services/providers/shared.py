@@ -5,7 +5,7 @@ provider is held to exactly the same ground rules and produces the same
 shaped output - see classifier.py's module docstring for the data
 integrity rules this prompt enforces.
 
-Two separate tasks live here, deliberately kept apart:
+Four separate tasks live here, deliberately kept apart:
 - Column mapping: the reviewer has already picked the target template
   (see main.py's /classify), so the LLM only maps columns into it. This
   keeps the prompt small - just one template's fields, not all five -
@@ -15,6 +15,12 @@ Two separate tasks live here, deliberately kept apart:
 - Template suggestion: an optional, opt-in "not sure which template?"
   helper that still looks at every candidate template. Only used when
   the reviewer explicitly asks for a suggestion, not on every mapping.
+- Value crosswalk: for a target field with a fixed set of allowed values
+  (e.g. Status), translate each unique value actually present in a
+  mapped source column into the closest allowed value - see issue #9.
+- Content recommendation: for a handful of fields (Risk Categories,
+  Issue Type) that need a per-row recommendation when no source column
+  maps to them at all, based on that row's own title/description text.
 """
 
 from __future__ import annotations
@@ -78,6 +84,58 @@ COLUMN_MAPPING_SCHEMA = {
     "required": ["column_mappings"],
 }
 
+VALUE_CROSSWALK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "matches": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "candidate_index": {
+                        "type": "integer",
+                        "description": "0-based index into the candidate values list this match is for.",
+                    },
+                    "best_match": {
+                        "anyOf": [{"type": "string"}, {"type": "null"}],
+                        "description": "Exact allowed value this candidate corresponds to, or null if none fit.",
+                    },
+                    "confidence": {"type": "number", "description": "0-1"},
+                    "rationale": {"type": "string", "description": "Short reason for this match."},
+                },
+                "required": ["candidate_index", "best_match", "confidence", "rationale"],
+            },
+        },
+    },
+    "required": ["matches"],
+}
+
+CONTENT_RECOMMENDATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "matches": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "row_index": {
+                        "type": "integer",
+                        "description": "0-based index into the rows list this recommendation is for.",
+                    },
+                    "best_match": {
+                        "anyOf": [{"type": "string"}, {"type": "null"}],
+                        "description": "Exact allowed value that best fits this row's content, or null if none fit.",
+                    },
+                    "confidence": {"type": "number", "description": "0-1"},
+                    "rationale": {"type": "string", "description": "Short reason, referencing the row's content."},
+                },
+                "required": ["row_index", "best_match", "confidence", "rationale"],
+            },
+        },
+    },
+    "required": ["matches"],
+}
+
 TEMPLATE_SUGGESTION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -137,6 +195,47 @@ Sample rows (up to 5):
 
 Propose a mapping for every source column into the target template above. Call submit_mapping \
 with your answer."""
+
+
+def build_value_crosswalk_prompt(
+    field_name: str,
+    allowed_values: list[str],
+    candidates: list[str],
+) -> str:
+    return f"""The CyberHQ target field "{field_name}" only accepts one of these exact values:
+
+{json.dumps(allowed_values)}
+
+Here are the distinct values actually found in the customer's source data for the column \
+mapped to this field (0-indexed):
+
+{json.dumps(list(enumerate(candidates)))}
+
+For each candidate value, pick whichever allowed value it most closely corresponds to in \
+meaning - not just similar spelling. If a candidate doesn't reasonably correspond to any \
+allowed value, set best_match to null rather than forcing a weak match; a human reviews \
+every match before it's used. Call submit_value_matches with one entry per candidate."""
+
+
+def build_content_recommendation_prompt(
+    field_name: str,
+    allowed_values: list[str],
+    row_contents: list[str],
+) -> str:
+    return f"""The CyberHQ target field "{field_name}" only accepts one of these exact values:
+
+{json.dumps(allowed_values)}
+
+No source column was mapped to this field, so it needs a per-row recommendation based on \
+each row's own content instead. Here is that content for each row (0-indexed) - each string \
+below is that row's own title/description text from the customer's source data:
+
+{json.dumps(list(enumerate(row_contents)))}
+
+For each row, recommend whichever allowed value best fits what that row is actually about. \
+If nothing reasonably fits, set best_match to null rather than forcing a weak match; a human \
+reviews every recommendation before it's used. Call submit_content_recommendations with one \
+entry per row."""
 
 
 def build_template_suggestion_prompt(

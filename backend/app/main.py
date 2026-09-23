@@ -14,6 +14,7 @@ from app import ingestion, settings, state
 from app.services import classifier as classifier_service
 from app.services import exporter as exporter_service
 from app.template_registry import (
+    CONTENT_FIELDS,
     TemplateSchema,
     framework_assessment_templates,
     load_registry,
@@ -55,6 +56,8 @@ def list_templates():
             "columns": t.columns,
             "field_notes": t.field_notes,
             "allowed_values": t.allowed_values,
+            "delimited_fields": t.delimited_fields,
+            "content_recommend_fields": t.content_recommend_fields,
         }
 
     return {
@@ -277,13 +280,148 @@ def suggest_template(session_id: str, req: SuggestTemplateRequest):
     return result
 
 
-# ---------- Export ----------
+# ---------- Constrained-field value mapping (issue #9) ----------
 
 class MappingEntry(BaseModel):
     source_column: str
     target_field: str | None = None
     transform: str = "none"
+    value_map: dict[str, str] | None = None
 
+
+class CrosswalkRequest(BaseModel):
+    sheet_name: str
+    source_column: str
+    target_field: str
+    template_key: str
+
+
+@app.post("/api/sessions/{session_id}/crosswalk-values")
+def crosswalk_values(session_id: str, req: CrosswalkRequest):
+    """Proposes how each distinct value found in a mapped source column
+    should translate into a constrained target field's allowed values.
+    Fetched per field, only for fields the reviewer has actually mapped
+    to a constrained target - see exporter.py's value_map."""
+    session = state.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired.")
+    df = _get_confirmed_sheet(session, req.sheet_name)
+
+    target = structural_templates(REGISTRY).get(req.template_key)
+    if not target:
+        raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
+    allowed = target.allowed_values.get(req.target_field)
+    if not allowed:
+        raise HTTPException(400, f"'{req.target_field}' has no allowed values to match against.")
+    if req.source_column not in df.columns:
+        raise HTTPException(404, f"Source column '{req.source_column}' not found in this sheet.")
+
+    delimited = req.target_field in target.delimited_fields
+    tokens: set[str] = set()
+    for raw in df[req.source_column]:
+        if delimited:
+            tokens.update(exporter_service.split_delimited_value(raw))
+        else:
+            val = "" if raw is None else str(raw).strip()
+            if val:
+                tokens.add(val)
+
+    candidates = sorted(tokens)
+    if not candidates:
+        return {"matches": []}
+
+    try:
+        result = classifier_service.match_column_values(
+            field_name=req.target_field,
+            allowed_values=allowed,
+            candidates=candidates,
+        )
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+    matches = [
+        {
+            "source_value": candidates[m["candidate_index"]],
+            "suggested_target": m.get("best_match"),
+            "confidence": m.get("confidence", 0),
+            "rationale": m.get("rationale", ""),
+        }
+        for m in result.get("matches", [])
+        if 0 <= m.get("candidate_index", -1) < len(candidates)
+    ]
+    return {"matches": matches}
+
+
+class ContentRecommendRequest(BaseModel):
+    sheet_name: str
+    target_field: str
+    template_key: str
+    mapping: list[MappingEntry]  # the reviewer's current mapping, to find content columns
+
+
+@app.post("/api/sessions/{session_id}/recommend-from-content")
+def recommend_from_content(session_id: str, req: ContentRecommendRequest):
+    """Opt-in per-row recommendation for a constrained target field with no
+    mapped source column at all (e.g. Risk Categories, Issue Type) - based
+    on that row's own content, using whichever source columns are already
+    mapped to the template's title/description-equivalent fields (see
+    template_registry.CONTENT_FIELDS), falling back to every currently-
+    mapped column if none of those are mapped yet."""
+    session = state.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired.")
+    df = _get_confirmed_sheet(session, req.sheet_name)
+
+    target = structural_templates(REGISTRY).get(req.template_key)
+    if not target:
+        raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
+    allowed = target.allowed_values.get(req.target_field)
+    if not allowed:
+        raise HTTPException(400, f"'{req.target_field}' has no allowed values to match against.")
+
+    content_targets = set(CONTENT_FIELDS.get(req.template_key, []))
+    content_source_cols = [m.source_column for m in req.mapping if m.target_field in content_targets]
+    if not content_source_cols:
+        content_source_cols = [m.source_column for m in req.mapping if m.target_field]
+    if not content_source_cols:
+        raise HTTPException(
+            400, "No mapped source columns to build row content from yet - map at least one column first."
+        )
+
+    row_contents = []
+    for _, row in df.iterrows():
+        parts = [f"{col}: {row.get(col, '')}" for col in content_source_cols if str(row.get(col, "")).strip()]
+        row_contents.append(" | ".join(parts))
+
+    try:
+        result = classifier_service.recommend_from_content(
+            field_name=req.target_field,
+            allowed_values=allowed,
+            row_contents=row_contents,
+        )
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+    # Frontend only ever has the first few sample rows client-side, but needs
+    # something to show per row in the review table - echo back a short
+    # preview of what was actually classified rather than making it re-fetch
+    # the whole sheet.
+    recommendations: list[dict | None] = [
+        {"content_preview": content[:120], "suggested_target": None, "confidence": 0, "rationale": ""}
+        if content
+        else None
+        for content in row_contents
+    ]
+    for m in result.get("matches", []):
+        idx = m.get("row_index")
+        if idx is not None and 0 <= idx < len(recommendations) and recommendations[idx] is not None:
+            recommendations[idx]["suggested_target"] = m.get("best_match")
+            recommendations[idx]["confidence"] = m.get("confidence", 0)
+            recommendations[idx]["rationale"] = m.get("rationale", "")
+    return {"recommendations": recommendations}
+
+
+# ---------- Export ----------
 
 class ExportRequest(BaseModel):
     sheet_name: str
@@ -291,6 +429,8 @@ class ExportRequest(BaseModel):
     mapping: list[MappingEntry]
     catch_all_field: str | None = None
     confirmed_drop_columns: list[str] = []
+    field_defaults: dict[str, str] | None = None
+    field_row_values: dict[str, list[str]] | None = None
 
 
 @app.post("/api/sessions/{session_id}/export")
@@ -304,7 +444,8 @@ def export(session_id: str, req: ExportRequest):
         raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
 
     mapping = [
-        exporter_service.MappingRow(m.source_column, m.target_field, m.transform) for m in req.mapping
+        exporter_service.MappingRow(m.source_column, m.target_field, m.transform, m.value_map)
+        for m in req.mapping
     ]
 
     try:
@@ -314,6 +455,9 @@ def export(session_id: str, req: ExportRequest):
             target=target,
             catch_all_field=req.catch_all_field,
             confirmed_drop_columns=req.confirmed_drop_columns,
+            field_defaults=req.field_defaults,
+            field_row_values=req.field_row_values,
+            delimited_fields=target.delimited_fields,
         )
     except exporter_service.UnresolvedColumnsError as e:
         raise HTTPException(

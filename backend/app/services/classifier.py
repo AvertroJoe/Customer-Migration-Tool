@@ -96,3 +96,43 @@ def suggest_template(
         candidate_templates=candidate_templates,
         model=model,
     )
+
+
+def match_column_values(
+    field_name: str,
+    allowed_values: list[str],
+    candidates: list[str],
+    model: str | None = None,
+    provider: str | None = None,
+) -> dict:
+    """Ask the configured LLM provider to translate each distinct value found
+    in a mapped source column into the closest allowed value for a
+    constrained target field (e.g. Status). See issue #9."""
+
+    module = _get_module(provider)
+    return module.match_column_values(
+        field_name=field_name,
+        allowed_values=allowed_values,
+        candidates=candidates,
+        model=model,
+    )
+
+
+def recommend_from_content(
+    field_name: str,
+    allowed_values: list[str],
+    row_contents: list[str],
+    model: str | None = None,
+    provider: str | None = None,
+) -> dict:
+    """Ask the configured LLM provider to recommend an allowed value per row,
+    from that row's own content - used only when no source column maps to a
+    constrained target field at all (e.g. Risk Categories, Issue Type)."""
+
+    module = _get_module(provider)
+    return module.recommend_from_content(
+        field_name=field_name,
+        allowed_values=allowed_values,
+        row_contents=row_contents,
+        model=model,
+    )

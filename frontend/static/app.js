@@ -6,6 +6,8 @@ const state = {
   currentTemplateKey: null,
   mappingRows: [], // {source_column, target_field, confidence, rationale, transform}
   settings: { active_provider: null, providers: [] },
+  // field -> { mode: "crosswalk"|"content"|"default", ... } - see buildValueConfirmPlan()
+  valueConfirmState: {},
 };
 
 const CATCHALL_NAMES = ["other fields", "other field", "notes", "comments"];
@@ -33,6 +35,8 @@ async function init() {
   $("map-columns-btn").addEventListener("click", onMapColumns);
   $("change-template-btn").addEventListener("click", onChangeTemplate);
   $("reclassify-btn").addEventListener("click", () => classify(state.currentTemplateKey));
+  $("continue-to-values-btn").addEventListener("click", onContinueToValues);
+  $("back-to-mapping-btn").addEventListener("click", onBackToMapping);
   $("export-btn").addEventListener("click", () => attemptExport([]));
   $("confirm-drop-btn").addEventListener("click", onConfirmDrop);
   $("cancel-drop-btn").addEventListener("click", () => $("drop-confirm-panel").classList.add("hidden"));
@@ -216,6 +220,7 @@ function selectSheet(name) {
   });
   $("template-panel").classList.add("hidden");
   $("mapping-panel").classList.add("hidden");
+  $("value-confirm-panel").classList.add("hidden");
   $("drop-confirm-panel").classList.add("hidden");
   $("template-suggestion-banner").innerHTML = "";
   $("header-row-status").innerHTML = "";
@@ -297,6 +302,7 @@ async function confirmHeaderRow() {
   banner($("header-row-status"), "ok", `Using row ${headerRow} as the header — found ${result.columns.length} column(s), ${result.row_count} data row(s).`);
 
   $("mapping-panel").classList.add("hidden");
+  $("value-confirm-panel").classList.add("hidden");
   $("template-suggestion-banner").innerHTML = "";
   $("template-panel").classList.remove("hidden");
   populateTemplateSelect();
@@ -342,6 +348,7 @@ async function suggestTemplate() {
 function onMapColumns() {
   state.currentTemplateKey = $("template-select").value;
   $("mapping-panel").classList.remove("hidden");
+  $("value-confirm-panel").classList.add("hidden");
   $("drop-confirm-panel").classList.add("hidden");
   $("mapping-target-label").textContent = currentTemplate()?.label || state.currentTemplateKey;
   classify(state.currentTemplateKey);
@@ -350,11 +357,18 @@ function onMapColumns() {
 
 function onChangeTemplate() {
   $("mapping-panel").classList.add("hidden");
+  $("value-confirm-panel").classList.add("hidden");
   $("drop-confirm-panel").classList.add("hidden");
   $("template-panel").scrollIntoView({ behavior: "smooth" });
 }
 
+function onBackToMapping() {
+  $("value-confirm-panel").classList.add("hidden");
+  $("mapping-panel").scrollIntoView({ behavior: "smooth" });
+}
+
 async function classify(templateKey) {
+  $("value-confirm-panel").classList.add("hidden");
   banner($("mapping-banner"), "info", "Asking the LLM to propose a column mapping…");
 
   const res = await fetch(`/api/sessions/${state.sessionId}/classify`, {
@@ -472,8 +486,296 @@ function populateCatchAllSelect(tmpl) {
   if (guess) sel.value = guess;
 }
 
+// ---------- Step 6: constrained-field value confirmation (issue #9) ----------
+
+function onContinueToValues() {
+  state.valueConfirmState = buildValueConfirmPlan();
+  $("value-confirm-panel").classList.remove("hidden");
+  $("drop-confirm-panel").classList.add("hidden");
+  renderValueConfirmPanel();
+  $("value-confirm-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+function buildValueConfirmPlan() {
+  const tmpl = currentTemplate();
+  const allowedFields = Object.keys(tmpl.allowed_values || {}).filter(
+    (f) => (tmpl.allowed_values[f] || []).length > 0
+  );
+  const plan = {};
+  allowedFields.forEach((field) => {
+    const mappedRow = state.mappingRows.find((r) => r.target_field === field);
+    if (mappedRow) {
+      plan[field] = { mode: "crosswalk", sourceColumn: mappedRow.source_column, matches: null, selections: {} };
+    } else if ((tmpl.content_recommend_fields || []).includes(field)) {
+      plan[field] = { mode: "content", recommendations: null, rowValues: null, showAll: false };
+    } else {
+      plan[field] = { mode: "default", defaultValue: "" };
+    }
+  });
+  return plan;
+}
+
+function renderValueConfirmPanel() {
+  const tmpl = currentTemplate();
+  const container = $("value-confirm-fields");
+  container.innerHTML = "";
+  Object.entries(state.valueConfirmState).forEach(([field, fieldState]) => {
+    const card = document.createElement("div");
+    card.className = "value-field-card";
+    if (fieldState.mode === "crosswalk") renderCrosswalkCard(card, field, fieldState, tmpl);
+    else if (fieldState.mode === "content") renderContentCard(card, field, fieldState, tmpl);
+    else renderDefaultCard(card, field, fieldState, tmpl);
+    container.appendChild(card);
+  });
+}
+
+function buildAllowedValueSelect(field, tmpl, currentValue, placeholder, onChange) {
+  const select = document.createElement("select");
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "";
+  noneOpt.textContent = placeholder;
+  select.appendChild(noneOpt);
+  (tmpl.allowed_values[field] || []).forEach((val) => {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = val;
+    select.appendChild(opt);
+  });
+  select.value = currentValue || "";
+  select.addEventListener("change", () => onChange(select.value));
+  return select;
+}
+
+function renderCrosswalkCard(card, field, fieldState, tmpl) {
+  card.innerHTML = `<h3>${field} <span class="field-source-note">(from "${fieldState.sourceColumn}")</span></h3>`;
+
+  if (fieldState.error) {
+    const p = document.createElement("p");
+    p.className = "warn-note";
+    p.textContent = fieldState.error;
+    card.appendChild(p);
+    return;
+  }
+  if (!fieldState.matches) {
+    if (!fieldState.fetching) fetchCrosswalk(field);
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "Fetching suggestions…";
+    card.appendChild(p);
+    return;
+  }
+  if (fieldState.matches.length === 0) {
+    const p = document.createElement("p");
+    p.className = "hint";
+    p.textContent = "No values found in this column.";
+    card.appendChild(p);
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "crosswalk-table";
+  table.innerHTML = "<thead><tr><th>Source value</th><th>Maps to</th><th>Confidence &amp; why</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  fieldState.matches.forEach((m) => {
+    if (fieldState.selections[m.source_value] === undefined) {
+      fieldState.selections[m.source_value] = m.suggested_target || "";
+    }
+    const tr = document.createElement("tr");
+    const select = buildAllowedValueSelect(field, tmpl, fieldState.selections[m.source_value], "— leave as-is —", (v) => {
+      fieldState.selections[m.source_value] = v;
+    });
+    tr.innerHTML = `
+      <td class="crosswalk-source">${m.source_value}</td>
+      <td></td>
+      <td>
+        <span class="confidence ${confidenceClass(m.confidence || 0)}">${Math.round((m.confidence || 0) * 100)}%</span>
+        <div class="rationale">${m.rationale || ""}</div>
+      </td>`;
+    tr.children[1].appendChild(select);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  card.appendChild(table);
+}
+
+async function fetchCrosswalk(field) {
+  const fieldState = state.valueConfirmState[field];
+  fieldState.fetching = true;
+  const res = await fetch(`/api/sessions/${state.sessionId}/crosswalk-values`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sheet_name: state.currentSheet.name,
+      source_column: fieldState.sourceColumn,
+      target_field: field,
+      template_key: state.currentTemplateKey,
+    }),
+  });
+  fieldState.fetching = false;
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    fieldState.error = `Suggestions failed: ${err.detail || res.statusText}. You can still pick values manually below once mapped.`;
+    fieldState.matches = [];
+    renderValueConfirmPanel();
+    return;
+  }
+  const result = await res.json();
+  fieldState.matches = result.matches;
+  renderValueConfirmPanel();
+}
+
+function renderContentCard(card, field, fieldState, tmpl) {
+  card.innerHTML = `<h3>${field} <span class="unmapped-badge">not mapped</span></h3>
+    <p class="hint">No source column maps to this field — recommend a value per row from its content instead.</p>`;
+
+  if (!fieldState.recommendations) {
+    const btn = document.createElement("button");
+    btn.className = "secondary";
+    btn.type = "button";
+    btn.textContent = fieldState.fetching ? "Recommending…" : "Recommend from content";
+    btn.disabled = !!fieldState.fetching;
+    btn.addEventListener("click", () => fetchContentRecommendation(field));
+    card.appendChild(btn);
+    if (fieldState.error) {
+      const p = document.createElement("p");
+      p.className = "warn-note";
+      p.textContent = fieldState.error;
+      card.appendChild(p);
+    }
+    return;
+  }
+
+  const indexed = fieldState.recommendations
+    .map((r, idx) => (r ? { ...r, idx } : null))
+    .filter(Boolean);
+  const lowConfidence = indexed.filter((r) => (r.confidence || 0) < 0.4);
+  const total = indexed.length;
+
+  const summary = document.createElement("div");
+  summary.className = "recommend-summary";
+  summary.textContent = `${total} row(s) classified${lowConfidence.length ? `, ${lowConfidence.length} low-confidence` : ""}. `;
+  if (total) {
+    const toggleBtn = document.createElement("button");
+    toggleBtn.type = "button";
+    toggleBtn.className = "recommend-toggle";
+    toggleBtn.textContent = fieldState.showAll ? "Show only low-confidence" : `Show all ${total} row(s)`;
+    toggleBtn.addEventListener("click", () => {
+      fieldState.showAll = !fieldState.showAll;
+      renderValueConfirmPanel();
+    });
+    summary.appendChild(toggleBtn);
+  }
+  card.appendChild(summary);
+
+  const rowsToShow = fieldState.showAll ? indexed : lowConfidence;
+  if (rowsToShow.length) {
+    const table = document.createElement("table");
+    table.className = "crosswalk-table";
+    table.innerHTML = "<thead><tr><th>Row content</th><th>Recommended</th><th>Confidence &amp; why</th></tr></thead>";
+    const tbody = document.createElement("tbody");
+    rowsToShow.forEach((r) => {
+      const tr = document.createElement("tr");
+      const select = buildAllowedValueSelect(field, tmpl, fieldState.rowValues[r.idx], "— leave blank —", (v) => {
+        fieldState.rowValues[r.idx] = v;
+      });
+      tr.innerHTML = `
+        <td class="sample-values">${r.content_preview || ""}</td>
+        <td></td>
+        <td>
+          <span class="confidence ${confidenceClass(r.confidence || 0)}">${Math.round((r.confidence || 0) * 100)}%</span>
+          <div class="rationale">${r.rationale || ""}</div>
+        </td>`;
+      tr.children[1].appendChild(select);
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    card.appendChild(table);
+  }
+}
+
+async function fetchContentRecommendation(field) {
+  const fieldState = state.valueConfirmState[field];
+  fieldState.fetching = true;
+  renderValueConfirmPanel();
+
+  const res = await fetch(`/api/sessions/${state.sessionId}/recommend-from-content`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sheet_name: state.currentSheet.name,
+      target_field: field,
+      template_key: state.currentTemplateKey,
+      mapping: state.mappingRows.map((r) => ({
+        source_column: r.source_column,
+        target_field: r.target_field,
+        transform: r.transform || "none",
+      })),
+    }),
+  });
+  fieldState.fetching = false;
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    fieldState.error = err.detail || res.statusText;
+    renderValueConfirmPanel();
+    return;
+  }
+  const result = await res.json();
+  fieldState.recommendations = result.recommendations;
+  fieldState.rowValues = result.recommendations.map((r) => (r ? r.suggested_target || "" : ""));
+  renderValueConfirmPanel();
+}
+
+function renderDefaultCard(card, field, fieldState, tmpl) {
+  card.innerHTML = `<h3>${field} <span class="unmapped-badge">not mapped</span></h3>`;
+  const label = document.createElement("label");
+  label.className = "hint";
+  label.style.display = "block";
+  label.style.marginBottom = ".25rem";
+  label.textContent = "Set a default for all rows (optional)";
+  card.appendChild(label);
+
+  const select = buildAllowedValueSelect(field, tmpl, fieldState.defaultValue, "— leave blank —", (v) => {
+    fieldState.defaultValue = v;
+  });
+  card.appendChild(select);
+
+  const isNumericRange = (tmpl.allowed_values[field] || []).every((v) => /^\d+$/.test(v));
+  if (isNumericRange) {
+    const warn = document.createElement("p");
+    warn.className = "warn-note";
+    warn.textContent =
+      "Heads up: this writes the same number into every row for this field — usually only appropriate if every row genuinely shares that rating.";
+    card.appendChild(warn);
+  }
+}
+
+function buildValuePayload() {
+  const valueMapsBySourceColumn = {};
+  const fieldDefaults = {};
+  const fieldRowValues = {};
+
+  Object.entries(state.valueConfirmState).forEach(([field, fs]) => {
+    if (fs.mode === "crosswalk" && fs.matches) {
+      const map = {};
+      Object.entries(fs.selections).forEach(([sourceValue, target]) => {
+        if (target) map[sourceValue] = target;
+      });
+      if (Object.keys(map).length) valueMapsBySourceColumn[fs.sourceColumn] = map;
+    } else if (fs.mode === "content" && fs.rowValues) {
+      fieldRowValues[field] = fs.rowValues.map((v) => v || "");
+    } else if (fs.mode === "default" && fs.defaultValue) {
+      fieldDefaults[field] = fs.defaultValue;
+    }
+  });
+
+  return { valueMapsBySourceColumn, fieldDefaults, fieldRowValues };
+}
+
 async function attemptExport(confirmedDropColumns) {
   const catchAll = $("catchall-select").value || null;
+  const { valueMapsBySourceColumn, fieldDefaults, fieldRowValues } = buildValuePayload();
   const payload = {
     sheet_name: state.currentSheet.name,
     template_key: state.currentTemplateKey,
@@ -481,9 +783,12 @@ async function attemptExport(confirmedDropColumns) {
       source_column: r.source_column,
       target_field: r.target_field,
       transform: r.transform || "none",
+      value_map: valueMapsBySourceColumn[r.source_column] || undefined,
     })),
     catch_all_field: catchAll,
     confirmed_drop_columns: confirmedDropColumns,
+    field_defaults: Object.keys(fieldDefaults).length ? fieldDefaults : undefined,
+    field_row_values: Object.keys(fieldRowValues).length ? fieldRowValues : undefined,
   };
 
   banner($("export-status"), "info", "Generating CSV…");

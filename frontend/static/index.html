@@ -114,6 +114,19 @@
         <select id="catchall-select"><option value="">— drop unmapped columns instead (you'll be asked to confirm) —</option></select>
       </div>
 
+      <button id="continue-to-values-btn" type="button">Continue</button>
+    </section>
+
+    <!-- STEP 6: Confirm values for constrained fields -->
+    <section class="card hidden" id="value-confirm-panel">
+      <h2>6. Confirm values for constrained fields</h2>
+      <p>Some CyberHQ fields only accept specific values (e.g. Status). Review how source values
+        translate below before exporting - nothing here is applied without your say-so.</p>
+      <div class="row-actions" style="margin-bottom:.75rem;">
+        <button class="secondary" id="back-to-mapping-btn" type="button">Back to mapping</button>
+      </div>
+      <div id="value-confirm-fields"></div>
+
       <button id="export-btn">Generate CyberHQ import CSV</button>
       <div id="export-status"></div>
     </section>

@@ -113,6 +113,90 @@ FIELD_NOTES = {
 }
 
 
+# key -> {field: [allowed values]}. Confirmed with the customer/product owner field by
+# field - see PROJECT_BRIEF.md issue #9. Numeric-range fields (Likelihood/Impact) are
+# represented as a plain string list too (["1",..,"5"]) so nothing downstream needs a
+# separate type for "range" vs "enum".
+ALLOWED_VALUES = {
+    "risk_register": {
+        "Status": ["Active", "Mitigated", "Accepted", "Transferred", "Closed"],
+        "Priority": ["Low", "Medium", "High"],
+        "Treatment": ["Accept", "Mitigate", "Transfer", "Avoid"],
+        "Inherent Likelihood": ["1", "2", "3", "4", "5"],
+        "Inherent Impact": ["1", "2", "3", "4", "5"],
+        "Residual Likelihood": ["1", "2", "3", "4", "5"],
+        "Residual Impact": ["1", "2", "3", "4", "5"],
+        "Risk Categories": [
+            "Data Breach", "Data Tampering", "Fraud", "Extortion", "Defacement",
+            "System Availability", "System Misuse", "Malicious Damage",
+        ],
+    },
+    "issue": {
+        "Status": ["Open", "Acknowledged", "In Progress", "Resolved", "Risk Accepted", "Archived"],
+        "Type": ["Threat", "Vulnerability", "Environmental", "Technology", "Incident", "Other"],
+        "Likelihood Level": ["1", "2", "3", "4", "5"],
+        "Impact Level": ["1", "2", "3", "4", "5"],
+    },
+    "entity": {
+        "Industry": [
+            "Cloud Infrastructure - SaaS, Paas or IaaS", "Construction & Property",
+            "Energy & Utilities", "Fast Moving Consumer Goods", "Financial Services",
+            "Government", "Industry Association", "Mining & Metals", "Other", "Technology",
+            "Telecommunications", "Transportation",
+        ],
+        "Priority": ["High", "Medium", "Low"],
+        "Type": ["Internal", "External"],
+        "Network Access": ["Yes", "No"],
+        "Physical Access": ["Yes", "No"],
+        # As given, verbatim - includes overlapping bands (e.g. "> 5k" and "< 100k" both
+        # present). Not reordered/deduped - this is the customer's own configured list.
+        "Number of Employees": [
+            "< 100k", "10k - 50k", "50k - 100k", "50 - 100", "20 - 50", "> 5k", "> 500",
+            "100 - 500", "5k - 10k", "<20",
+        ],
+    },
+    "kbs": {
+        "Status": ["Open", "Archived"],
+        "Key": ["Yes", "No"],
+        "Data Stored": [
+            "Intellectual Property, Trade Secrets & Strategy",
+            "Personally Identifiable Information (PII)",
+            "Non-PII Customer Information",
+            "Non-PII Employee & HR Information",
+            "Marketing and Communications",
+            "Legal, Contracts and Agreements",
+            "Project Documentation (Sensitive)",
+            "Project Documentation (Non-sensitive)",
+            "Software Codes, Libraries and Technical Repos",
+            "Master Keys, Logs and Configuration",
+            "Other",
+        ],
+    },
+}
+
+# key -> [fields] whose values are ';'-delimited multi-select (a single cell can hold
+# several values). Needed as data, not just the prose already in FIELD_NOTES, since both
+# the crosswalk endpoint and exporter.py need to split/rejoin on it.
+DELIMITED_FIELDS = {
+    "risk_register": ["Risk Categories"],
+    "kbs": ["Data Stored"],
+}
+
+# key -> [fields] that get a per-row content-based recommendation (from CONTENT_FIELDS
+# below) instead of a plain default, when no source column maps to them at all.
+CONTENT_RECOMMEND_FIELDS = {
+    "risk_register": ["Risk Categories"],
+    "issue": ["Type"],
+}
+
+# key -> [target fields] whose mapped source column(s) supply the per-row text used for
+# content-based recommendation - e.g. a risk's Name + Description.
+CONTENT_FIELDS = {
+    "risk_register": ["Name", "Description"],
+    "issue": ["Title", "Description"],
+}
+
+
 @dataclass
 class TemplateSchema:
     key: str
@@ -122,6 +206,8 @@ class TemplateSchema:
     columns: list[str]
     field_notes: dict = field(default_factory=dict)
     allowed_values: dict = field(default_factory=dict)  # column -> [values]
+    delimited_fields: list = field(default_factory=list)
+    content_recommend_fields: list = field(default_factory=list)
     sample_rows: list[dict] = field(default_factory=list)
 
 
@@ -197,6 +283,10 @@ def load_registry() -> dict[str, TemplateSchema]:
             else:
                 columns, samples = _read_csv_headers_and_samples(path)
 
+            # Hardcoded, confirmed values are additive with whatever a Prefill sheet
+            # already supplied (Prefill wins on the rare chance a field appears in both).
+            allowed_values = {**ALLOWED_VALUES.get(key, {}), **allowed_values}
+
             registry[key] = TemplateSchema(
                 key=key,
                 label=label,
@@ -205,6 +295,8 @@ def load_registry() -> dict[str, TemplateSchema]:
                 columns=columns,
                 field_notes=FIELD_NOTES.get(key, {}),
                 allowed_values=allowed_values,
+                delimited_fields=DELIMITED_FIELDS.get(key, []),
+                content_recommend_fields=CONTENT_RECOMMEND_FIELDS.get(key, []),
                 sample_rows=samples,
             )
 

@@ -60,16 +60,29 @@
       <div class="sheet-picker" id="sheet-picker"></div>
     </section>
 
-    <!-- STEP 3: Mapping review -->
-    <section class="card hidden" id="mapping-panel">
-      <h2>3. Review the proposed mapping</h2>
-      <div id="mapping-banner"></div>
-
+    <!-- STEP 3: Pick target template -->
+    <section class="card hidden" id="template-panel">
+      <h2>3. Choose the CyberHQ template to migrate into</h2>
       <div class="field-group">
-        <label>Target CyberHQ template</label>
+        <label for="template-select">Target CyberHQ template</label>
         <select id="template-select"></select>
-        <button class="secondary" id="reclassify-btn">Re-run suggestions against this template</button>
       </div>
+      <div class="row-actions">
+        <button class="secondary" id="suggest-template-btn" type="button">Not sure? Suggest a template</button>
+        <button id="map-columns-btn" type="button">Map columns into this template</button>
+      </div>
+      <div id="template-suggestion-banner"></div>
+    </section>
+
+    <!-- STEP 4: Mapping review -->
+    <section class="card hidden" id="mapping-panel">
+      <h2>4. Review the proposed mapping</h2>
+      <div class="row-actions" style="margin-bottom:.75rem;">
+        <span>Mapping into: <strong id="mapping-target-label"></strong></span>
+        <button class="secondary" id="change-template-btn" type="button">Change template</button>
+        <button class="secondary" id="reclassify-btn" type="button">Re-run automatic suggestions</button>
+      </div>
+      <div id="mapping-banner"></div>
 
       <table id="mapping-table">
         <thead>

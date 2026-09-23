@@ -1,8 +1,10 @@
 """
 Calls an LLM (Claude or Gemini, whichever is configured in Settings) to
-(1) work out which CyberHQ structural template a source sheet most
-resembles, and (2) propose a column-to-field mapping with a confidence
-score and a plain-English rationale for each column.
+propose a column-to-field mapping - with a confidence score and a
+plain-English rationale for each column - once the reviewer has picked
+which CyberHQ template a source sheet should go into. Also offers an
+optional, opt-in template suggestion for when the reviewer isn't sure
+which template fits (see suggest_template below).
 
 This module never touches the actual source data values - it only ever
 sees column headers and a handful of sample rows, and only ever proposes
@@ -43,7 +45,38 @@ def get_active_provider_name() -> str:
     return DEFAULT_PROVIDER
 
 
+def _get_module(provider: str | None):
+    provider_name = (provider or get_active_provider_name()).strip().lower()
+    module = PROVIDERS.get(provider_name)
+    if module is None:
+        raise RuntimeError(
+            f"Unknown LLM provider '{provider_name}'. Choose one of: {', '.join(PROVIDERS)}."
+        )
+    return module
+
+
 def classify_sheet(
+    sheet_name: str,
+    source_columns: list[str],
+    sample_rows: list[dict],
+    target_template: TemplateSchema,
+    model: str | None = None,
+    provider: str | None = None,
+) -> dict:
+    """Ask the configured LLM provider to map one source sheet's columns
+    into the given (already-chosen) target template."""
+
+    module = _get_module(provider)
+    return module.classify_sheet(
+        sheet_name=sheet_name,
+        source_columns=source_columns,
+        sample_rows=sample_rows,
+        target_template=target_template,
+        model=model,
+    )
+
+
+def suggest_template(
     sheet_name: str,
     source_columns: list[str],
     sample_rows: list[dict],
@@ -51,17 +84,12 @@ def classify_sheet(
     model: str | None = None,
     provider: str | None = None,
 ) -> dict:
-    """Ask the configured LLM provider to classify one source sheet against
-    the candidate structural templates."""
+    """Ask the configured LLM provider which candidate template best fits
+    this sheet. Opt-in helper only - not used on the default mapping path,
+    since it has to send every candidate template's fields in one prompt."""
 
-    provider_name = (provider or get_active_provider_name()).strip().lower()
-    module = PROVIDERS.get(provider_name)
-    if module is None:
-        raise RuntimeError(
-            f"Unknown LLM provider '{provider_name}'. Choose one of: {', '.join(PROVIDERS)}."
-        )
-
-    return module.classify_sheet(
+    module = _get_module(provider)
+    return module.suggest_template(
         sheet_name=sheet_name,
         source_columns=source_columns,
         sample_rows=sample_rows,

@@ -28,7 +28,9 @@ async function init() {
   const res = await fetch("/api/templates");
   state.templates = await res.json();
   $("upload-btn").addEventListener("click", uploadFile);
-  $("template-select").addEventListener("change", onTemplateChange);
+  $("suggest-template-btn").addEventListener("click", suggestTemplate);
+  $("map-columns-btn").addEventListener("click", onMapColumns);
+  $("change-template-btn").addEventListener("click", onChangeTemplate);
   $("reclassify-btn").addEventListener("click", () => classify(state.currentTemplateKey));
   $("export-btn").addEventListener("click", () => attemptExport([]));
   $("confirm-drop-btn").addEventListener("click", onConfirmDrop);
@@ -211,10 +213,11 @@ function selectSheet(name) {
   document.querySelectorAll("#sheet-picker button").forEach((b) => {
     b.classList.toggle("active", b.textContent.startsWith(name));
   });
-  $("mapping-panel").classList.remove("hidden");
+  $("mapping-panel").classList.add("hidden");
   $("drop-confirm-panel").classList.add("hidden");
+  $("template-suggestion-banner").innerHTML = "";
+  $("template-panel").classList.remove("hidden");
   populateTemplateSelect();
-  classify(null);
 }
 
 function populateTemplateSelect() {
@@ -228,15 +231,54 @@ function populateTemplateSelect() {
   });
 }
 
-async function classify(forceTemplateKey) {
-  banner($("mapping-banner"), "info", "Asking Claude to classify this sheet and propose a mapping…");
-  const body = { sheet_name: state.currentSheet.name };
-  if (forceTemplateKey) body.template_key = forceTemplateKey;
+async function suggestTemplate() {
+  banner($("template-suggestion-banner"), "info", "Asking the LLM which template looks like the best fit…");
+  const res = await fetch(`/api/sessions/${state.sessionId}/suggest-template`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet_name: state.currentSheet.name }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    banner($("template-suggestion-banner"), "error", `Suggestion failed: ${err.detail || res.statusText}. Pick a template manually above.`);
+    return;
+  }
+
+  const result = await res.json();
+  if (result.target_template?.key) {
+    $("template-select").value = result.target_template.key;
+  }
+  const pct = Math.round((result.template_confidence || 0) * 100);
+  banner(
+    $("template-suggestion-banner"),
+    pct >= 70 ? "ok" : "warn",
+    `Suggested: <strong>${result.target_template?.label || result.best_template}</strong> (${pct}% confidence). ${result.template_rationale || ""}`
+  );
+}
+
+function onMapColumns() {
+  state.currentTemplateKey = $("template-select").value;
+  $("mapping-panel").classList.remove("hidden");
+  $("drop-confirm-panel").classList.add("hidden");
+  $("mapping-target-label").textContent = currentTemplate()?.label || state.currentTemplateKey;
+  classify(state.currentTemplateKey);
+  $("mapping-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+function onChangeTemplate() {
+  $("mapping-panel").classList.add("hidden");
+  $("drop-confirm-panel").classList.add("hidden");
+  $("template-panel").scrollIntoView({ behavior: "smooth" });
+}
+
+async function classify(templateKey) {
+  banner($("mapping-banner"), "info", "Asking the LLM to propose a column mapping…");
 
   const res = await fetch(`/api/sessions/${state.sessionId}/classify`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ sheet_name: state.currentSheet.name, template_key: templateKey }),
   });
 
   if (!res.ok) {
@@ -245,12 +287,9 @@ async function classify(forceTemplateKey) {
     banner(
       $("mapping-banner"),
       "error",
-      `Automatic classification failed (${msg}). You can still map columns manually below using the template dropdown.`
+      `Automatic mapping failed (${msg}). You can still map columns manually below.`
     );
-    // Fall back to an empty/manual mapping against whatever template is currently selected.
-    const fallbackKey = forceTemplateKey || state.templates.structural[0]?.key;
-    state.currentTemplateKey = fallbackKey;
-    $("template-select").value = fallbackKey;
+    // Fall back to an empty/manual mapping against the chosen template.
     state.mappingRows = state.currentSheet.columns.map((c) => ({
       source_column: c,
       target_field: null,
@@ -263,38 +302,13 @@ async function classify(forceTemplateKey) {
   }
 
   const result = await res.json();
-  state.currentTemplateKey = result.best_template;
-  $("template-select").value = result.best_template;
   state.mappingRows = result.column_mappings.map((m) => ({ ...m, transform: "none" }));
-
-  const pct = Math.round((result.template_confidence || 0) * 100);
-  banner(
-    $("mapping-banner"),
-    pct >= 70 ? "ok" : "warn",
-    `Best match: <strong>${result.target_template?.label || result.best_template}</strong> (${pct}% confidence). ${result.template_rationale || ""}`
-  );
+  banner($("mapping-banner"), "ok", `Proposed a mapping for ${state.mappingRows.length} column(s) — review and adjust below.`);
   renderMappingTable();
 }
 
 function currentTemplate() {
   return state.templates.structural.find((t) => t.key === state.currentTemplateKey);
-}
-
-function onTemplateChange() {
-  state.currentTemplateKey = $("template-select").value;
-  // Re-map existing source columns against the new template's column list, keep
-  // whatever mapping the reviewer already set where the field name still exists,
-  // clear it where it no longer applies.
-  const tmpl = currentTemplate();
-  const validFields = new Set(tmpl.columns);
-  state.mappingRows.forEach((row) => {
-    if (row.target_field && !validFields.has(row.target_field)) {
-      row.target_field = null;
-      row.confidence = 0;
-      row.rationale = "Cleared — not a field in the newly selected template.";
-    }
-  });
-  renderMappingTable();
 }
 
 function confidenceClass(c) {

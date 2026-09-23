@@ -4,6 +4,17 @@ backend (Claude, Gemini, ...). Keeping this in one place means every
 provider is held to exactly the same ground rules and produces the same
 shaped output - see classifier.py's module docstring for the data
 integrity rules this prompt enforces.
+
+Two separate tasks live here, deliberately kept apart:
+- Column mapping: the reviewer has already picked the target template
+  (see main.py's /classify), so the LLM only maps columns into it. This
+  keeps the prompt small - just one template's fields, not all five -
+  which matters: an earlier version sent all five templates on every
+  call and that prompt size alone was enough to hit capacity limits on
+  some Gemini tiers (see README "Known limitations").
+- Template suggestion: an optional, opt-in "not sure which template?"
+  helper that still looks at every candidate template. Only used when
+  the reviewer explicitly asks for a suggestion, not on every mapping.
 """
 
 from __future__ import annotations
@@ -25,8 +36,6 @@ Ground rules you must follow strictly:
    already implied by the column) - never a change in meaning or a value lookup/substitution you are \
    not certain preserves the original meaning.
 4. Every source column must appear exactly once in column_mappings, even if target_field is null.
-5. Prefer the template whose column set and sample data most closely resembles the source sheet's \
-   actual content, not just similar-sounding names.
 
 Respond only by producing the structured output requested - no prose outside it."""
 
@@ -34,21 +43,9 @@ Respond only by producing the structured output requested - no prose outside it.
 # for Claude's tool input_schema and Gemini's response_json_schema. Nullable
 # fields use `anyOf` with an explicit null type rather than a `type` array,
 # since that form is understood by both providers.
-MAPPING_SCHEMA = {
+COLUMN_MAPPING_SCHEMA = {
     "type": "object",
     "properties": {
-        "best_template": {
-            "type": "string",
-            "description": "The template key that best matches this sheet's content.",
-        },
-        "template_confidence": {
-            "type": "number",
-            "description": "0-1 confidence that best_template is the right artefact type for this sheet.",
-        },
-        "template_rationale": {
-            "type": "string",
-            "description": "One or two sentences explaining why this template was chosen.",
-        },
         "column_mappings": {
             "type": "array",
             "items": {
@@ -78,7 +75,26 @@ MAPPING_SCHEMA = {
             },
         },
     },
-    "required": ["best_template", "template_confidence", "column_mappings"],
+    "required": ["column_mappings"],
+}
+
+TEMPLATE_SUGGESTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "best_template": {
+            "type": "string",
+            "description": "The template key that best matches this sheet's content.",
+        },
+        "template_confidence": {
+            "type": "number",
+            "description": "0-1 confidence that best_template is the right artefact type for this sheet.",
+        },
+        "template_rationale": {
+            "type": "string",
+            "description": "One or two sentences explaining why this template was chosen.",
+        },
+    },
+    "required": ["best_template", "template_confidence"],
 }
 
 
@@ -100,7 +116,30 @@ def format_template_for_prompt(t: TemplateSchema) -> str:
     return "\n".join(lines)
 
 
-def build_user_prompt(
+def build_mapping_prompt(
+    sheet_name: str,
+    source_columns: list[str],
+    sample_rows: list[dict],
+    target_template: TemplateSchema,
+) -> str:
+    return f"""Here is the CyberHQ target template to map into:
+
+{format_template_for_prompt(target_template)}
+
+---
+
+Here is the SOURCE sheet to map. Sheet name: "{sheet_name}"
+
+Source columns: {json.dumps(source_columns)}
+
+Sample rows (up to 5):
+{json.dumps(sample_rows, indent=2, default=str)}
+
+Propose a mapping for every source column into the target template above. Call submit_mapping \
+with your answer."""
+
+
+def build_template_suggestion_prompt(
     sheet_name: str,
     source_columns: list[str],
     sample_rows: list[dict],
@@ -114,12 +153,13 @@ def build_user_prompt(
 
 ---
 
-Here is the SOURCE sheet to classify and map. Sheet name: "{sheet_name}"
+Here is the SOURCE sheet to classify. Sheet name: "{sheet_name}"
 
 Source columns: {json.dumps(source_columns)}
 
 Sample rows (up to 5):
 {json.dumps(sample_rows, indent=2, default=str)}
 
-Work out which target template this sheet is most likely meant for, then propose a mapping for \
-every source column. Call submit_mapping with your answer."""
+Work out which target template this sheet is most likely meant for - prefer the template whose \
+column set and sample data most closely resembles the source sheet's actual content, not just \
+similar-sounding names. Call submit_template_suggestion with your answer."""

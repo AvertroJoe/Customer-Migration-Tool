@@ -10,7 +10,30 @@ from anthropic import Anthropic, APIStatusError
 
 from app.template_registry import TemplateSchema
 
-from .shared import MAPPING_SCHEMA, SYSTEM_PROMPT, build_user_prompt
+from .shared import (
+    COLUMN_MAPPING_SCHEMA,
+    SYSTEM_PROMPT,
+    TEMPLATE_SUGGESTION_SCHEMA,
+    build_mapping_prompt,
+    build_template_suggestion_prompt,
+)
+
+LABEL = "Claude (Anthropic)"
+KEY_ENV_VAR = "ANTHROPIC_API_KEY"
+MODEL_ENV_VAR = "ANTHROPIC_MODEL"
+DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
+
+MAPPING_TOOL = {
+    "name": "submit_mapping",
+    "description": "Submit the proposed column mapping for this sheet.",
+    "input_schema": COLUMN_MAPPING_SCHEMA,
+}
+
+TEMPLATE_SUGGESTION_TOOL = {
+    "name": "submit_template_suggestion",
+    "description": "Submit which CyberHQ template best fits this sheet.",
+    "input_schema": TEMPLATE_SUGGESTION_SCHEMA,
+}
 
 
 def _clean_error_message(e: Exception) -> str:
@@ -22,50 +45,54 @@ def _clean_error_message(e: Exception) -> str:
             return message
     return str(e)
 
-LABEL = "Claude (Anthropic)"
-KEY_ENV_VAR = "ANTHROPIC_API_KEY"
-MODEL_ENV_VAR = "ANTHROPIC_MODEL"
-DEFAULT_MODEL = "claude-sonnet-4-5-20250929"
 
-MAPPING_TOOL = {
-    "name": "submit_mapping",
-    "description": "Submit the template classification and column mapping for this sheet.",
-    "input_schema": MAPPING_SCHEMA,
-}
-
-
-def classify_sheet(
-    sheet_name: str,
-    source_columns: list[str],
-    sample_rows: list[dict],
-    candidate_templates: dict[str, TemplateSchema],
-    model: str | None = None,
-) -> dict:
+def _call_tool(system_prompt: str, user_prompt: str, tool: dict, model: str) -> dict:
     api_key = os.environ.get(KEY_ENV_VAR)
     if not api_key:
         raise RuntimeError(f"{KEY_ENV_VAR} is not set. Add a Claude API key in Settings.")
-
-    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
-    user_prompt = build_user_prompt(sheet_name, source_columns, sample_rows, candidate_templates)
 
     client = Anthropic(api_key=api_key)
     try:
         response = client.messages.create(
             model=model,
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            tools=[MAPPING_TOOL],
-            tool_choice={"type": "tool", "name": "submit_mapping"},
+            system=system_prompt,
+            tools=[tool],
+            tool_choice={"type": "tool", "name": tool["name"]},
             messages=[{"role": "user", "content": user_prompt}],
         )
     except Exception as e:
         raise RuntimeError(f"Claude request failed: {_clean_error_message(e)}") from e
 
     for block in response.content:
-        if block.type == "tool_use" and block.name == "submit_mapping":
+        if block.type == "tool_use" and block.name == tool["name"]:
             return block.input
 
-    raise RuntimeError("Claude did not return a submit_mapping tool call.")
+    raise RuntimeError(f"Claude did not return a {tool['name']} tool call.")
+
+
+def classify_sheet(
+    sheet_name: str,
+    source_columns: list[str],
+    sample_rows: list[dict],
+    target_template: TemplateSchema,
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_mapping_prompt(sheet_name, source_columns, sample_rows, target_template)
+    return _call_tool(SYSTEM_PROMPT, user_prompt, MAPPING_TOOL, model)
+
+
+def suggest_template(
+    sheet_name: str,
+    source_columns: list[str],
+    sample_rows: list[dict],
+    candidate_templates: dict[str, TemplateSchema],
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_template_suggestion_prompt(sheet_name, source_columns, sample_rows, candidate_templates)
+    return _call_tool(SYSTEM_PROMPT, user_prompt, TEMPLATE_SUGGESTION_TOOL, model)
 
 
 def test_key(api_key: str) -> None:

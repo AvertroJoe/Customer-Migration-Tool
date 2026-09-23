@@ -160,7 +160,7 @@ async def upload(file: UploadFile = File(...)):
 
 class ClassifyRequest(BaseModel):
     sheet_name: str
-    template_key: str | None = None  # force classification against one specific template
+    template_key: str  # the reviewer has already chosen which template to map into
 
 
 @app.post("/api/sessions/{session_id}/classify")
@@ -171,15 +171,46 @@ def classify(session_id: str, req: ClassifyRequest):
     if req.sheet_name not in session.sheets:
         raise HTTPException(404, f"Sheet '{req.sheet_name}' not found in this session.")
 
-    df = session.sheets[req.sheet_name]
     candidates = structural_templates(REGISTRY)
-    if req.template_key:
-        if req.template_key not in candidates:
-            raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
-        candidates = {req.template_key: candidates[req.template_key]}
+    if req.template_key not in candidates:
+        raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
+    target = candidates[req.template_key]
 
+    df = session.sheets[req.sheet_name]
     try:
         result = classifier_service.classify_sheet(
+            sheet_name=req.sheet_name,
+            source_columns=list(df.columns),
+            sample_rows=df.head(5).to_dict(orient="records"),
+            target_template=target,
+        )
+    except RuntimeError as e:
+        raise HTTPException(502, str(e))
+
+    return {"column_mappings": result.get("column_mappings", [])}
+
+
+class SuggestTemplateRequest(BaseModel):
+    sheet_name: str
+
+
+@app.post("/api/sessions/{session_id}/suggest-template")
+def suggest_template(session_id: str, req: SuggestTemplateRequest):
+    """Opt-in helper for when the reviewer isn't sure which CyberHQ template
+    fits - separate from /classify so the normal mapping path never has to
+    send every candidate template's fields in one prompt (see
+    services/classifier.py's module docstring)."""
+    session = state.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired.")
+    if req.sheet_name not in session.sheets:
+        raise HTTPException(404, f"Sheet '{req.sheet_name}' not found in this session.")
+
+    df = session.sheets[req.sheet_name]
+    candidates = structural_templates(REGISTRY)
+
+    try:
+        result = classifier_service.suggest_template(
             sheet_name=req.sheet_name,
             source_columns=list(df.columns),
             sample_rows=df.head(5).to_dict(orient="records"),
@@ -190,15 +221,7 @@ def classify(session_id: str, req: ClassifyRequest):
 
     target = REGISTRY.get(result.get("best_template", ""))
     result["target_template"] = (
-        {
-            "key": target.key,
-            "label": target.label,
-            "columns": target.columns,
-            "field_notes": target.field_notes,
-            "allowed_values": target.allowed_values,
-        }
-        if target
-        else None
+        {"key": target.key, "label": target.label} if target else None
     )
     return result
 

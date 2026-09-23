@@ -13,7 +13,18 @@ from google.genai import types
 
 from app.template_registry import TemplateSchema
 
-from .shared import MAPPING_SCHEMA, SYSTEM_PROMPT, build_user_prompt
+from .shared import (
+    COLUMN_MAPPING_SCHEMA,
+    SYSTEM_PROMPT,
+    TEMPLATE_SUGGESTION_SCHEMA,
+    build_mapping_prompt,
+    build_template_suggestion_prompt,
+)
+
+LABEL = "Gemini (Google)"
+KEY_ENV_VAR = "GEMINI_API_KEY"
+MODEL_ENV_VAR = "GEMINI_MODEL"
+DEFAULT_MODEL = "gemini-flash-lite-latest"
 
 
 def _clean_error_message(e: Exception) -> str:
@@ -23,31 +34,17 @@ def _clean_error_message(e: Exception) -> str:
         return e.message
     return str(e)
 
-LABEL = "Gemini (Google)"
-KEY_ENV_VAR = "GEMINI_API_KEY"
-MODEL_ENV_VAR = "GEMINI_MODEL"
-DEFAULT_MODEL = "gemini-flash-lite-latest"
 
-
-def classify_sheet(
-    sheet_name: str,
-    source_columns: list[str],
-    sample_rows: list[dict],
-    candidate_templates: dict[str, TemplateSchema],
-    model: str | None = None,
-) -> dict:
+def _call_structured(system_prompt: str, user_prompt: str, schema: dict, model: str) -> dict:
     api_key = os.environ.get(KEY_ENV_VAR)
     if not api_key:
         raise RuntimeError(f"{KEY_ENV_VAR} is not set. Add a Gemini API key in Settings.")
 
-    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
-    user_prompt = build_user_prompt(sheet_name, source_columns, sample_rows, candidate_templates)
-
     client = genai.Client(api_key=api_key)
     config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
+        system_instruction=system_prompt,
         response_mime_type="application/json",
-        response_json_schema=MAPPING_SCHEMA,
+        response_json_schema=schema,
         temperature=0,
     )
     try:
@@ -62,6 +59,30 @@ def classify_sheet(
         return json.loads(text)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Gemini returned output that wasn't valid JSON: {e}") from e
+
+
+def classify_sheet(
+    sheet_name: str,
+    source_columns: list[str],
+    sample_rows: list[dict],
+    target_template: TemplateSchema,
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_mapping_prompt(sheet_name, source_columns, sample_rows, target_template)
+    return _call_structured(SYSTEM_PROMPT, user_prompt, COLUMN_MAPPING_SCHEMA, model)
+
+
+def suggest_template(
+    sheet_name: str,
+    source_columns: list[str],
+    sample_rows: list[dict],
+    candidate_templates: dict[str, TemplateSchema],
+    model: str | None = None,
+) -> dict:
+    model = model or os.environ.get(MODEL_ENV_VAR) or DEFAULT_MODEL
+    user_prompt = build_template_suggestion_prompt(sheet_name, source_columns, sample_rows, candidate_templates)
+    return _call_structured(SYSTEM_PROMPT, user_prompt, TEMPLATE_SUGGESTION_SCHEMA, model)
 
 
 def test_key(api_key: str) -> None:

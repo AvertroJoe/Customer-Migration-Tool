@@ -8,15 +8,17 @@ with a human reviewing and approving the field mapping before anything is writte
 
 1. **Configure** - pick an LLM provider (Claude or Gemini) and add an API key on the
    Settings panel at the top of the page. See "LLM provider settings" below.
-2. **Upload** a customer spreadsheet (.csv or .xlsx, any sheet layout).
-3. **Classify** - the configured LLM reads the column headers and a few sample rows and
-   proposes which CyberHQ template this sheet is (risk register, issue register,
-   entity/vendor list, key business systems, or resource/control library) and how each
-   source column maps to a target field, with a confidence score and a short rationale per
-   column.
-4. **Review** - every suggestion is editable. Change the target template, remap any column,
-   choose a format conversion (date format, list delimiter, case), route leftover columns to
-   a catch-all field, or leave columns unmapped.
+2. **Upload** a customer spreadsheet (.csv or .xlsx, any sheet layout) and pick the sheet to
+   migrate.
+3. **Choose the target template** - risk register, issue register, entity/vendor list, key
+   business systems, or resource/control library. The reviewer picks this, since they
+   already know what the file is; not sure? "Suggest a template" asks the LLM to guess from
+   the column headers and sample rows, as an optional aid rather than the default path.
+4. **Map** - once the target template is set, the configured LLM proposes how each source
+   column maps to a target field, with a confidence score and a short rationale per column.
+   Every suggestion is editable: remap any column, choose a format conversion (date format,
+   list delimiter, case), route leftover columns to a catch-all field, or leave columns
+   unmapped.
 5. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
    with nowhere to go, the tool stops and makes you explicitly confirm it should be dropped -
    it never discards data silently.
@@ -108,15 +110,23 @@ be added the same way as they're supplied.
 ## Known limitations / not yet built
 
 - **Gemini model choice matters more than expected.** With a real key, the full `-flash` and
-  `-pro` tiers (`gemini-flash-latest`, `gemini-pro-latest`, etc.) either 503'd
-  ("high demand") on our actual prompt size (~9k characters, once all five template
-  definitions are included) or hit a billing/quota wall - reproducible with generic filler
-  text of the same length, so it wasn't specific to our prompt content or schema. The
-  `-flash-lite` tier (default: `gemini-flash-lite-latest`) handled the same prompt reliably
-  and produced correctly-shaped, sensible mappings. If classification is failing on Gemini,
-  try a `-flash-lite` model via `GEMINI_MODEL` in Settings before assuming the prompt/schema
-  is broken. Claude hasn't yet been verified with a real key - see the open decisions list in
-  `PROJECT_BRIEF.md`.
+  `-pro` tiers (`gemini-flash-latest`, `gemini-pro-latest`, etc.) either 503'd ("high demand")
+  on a ~9k character prompt (the size of the old all-five-templates-at-once classify prompt,
+  since replaced - see below - but still the size of the "Suggest a template" prompt, which
+  still sends every candidate template) or hit a billing/quota wall - reproducible with
+  generic filler text of the same length, so it wasn't specific to our prompt content or
+  schema. The `-flash-lite` tier (default: `gemini-flash-lite-latest`) handled the same
+  prompt reliably and produced correctly-shaped, sensible mappings. If a Gemini call is
+  failing, try a `-flash-lite` model via `GEMINI_MODEL` in Settings before assuming the
+  prompt/schema is broken. Claude hasn't yet been verified with a real key - see the open
+  decisions list in `PROJECT_BRIEF.md`.
+- **Column mapping now requires the reviewer to pick the target template first** (step 3
+  above) rather than having the LLM guess it as part of every mapping call. This shrinks the
+  mapping prompt to one template's fields instead of all five (directly avoiding the size
+  issue above on the default path) and removes template misclassification as a failure mode,
+  since the reviewer usually already knows what kind of file they're migrating. The "Suggest
+  a template" button is a separate, opt-in call for when they don't - it still sends every
+  candidate template, so it inherits the model-choice caveat above.
 - **Framework maturity assessments** (e.g. the NIST CSF template) are a different shape of
   problem to the other five templates: they're a fixed, ordered question list that a
   customer's own assessment/gap-analysis content needs to be *matched against* by meaning

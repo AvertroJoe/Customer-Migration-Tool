@@ -33,6 +33,15 @@ app.add_middleware(
 )
 
 
+# ---------- Health ----------
+
+@app.get("/api/health")
+def health():
+    """Used by launcher/bootstrap.py to check whether an instance is
+    already running on this port before starting another one."""
+    return {"app": "grc-migration-tool", "status": "ok"}
+
+
 # ---------- Templates ----------
 
 @app.get("/api/templates")

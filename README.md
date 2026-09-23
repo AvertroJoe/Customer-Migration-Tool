@@ -12,8 +12,24 @@ No install, no Python, no git required - download one small file and run it:
    and download `run-mac.zip` (macOS) or `run-windows.zip` (Windows).
 2. Unzip it, then run the file inside:
    - **macOS**: double-click `run-mac.command`. The first time, macOS will refuse to open it
-     ("cannot be opened because it is from an unidentified developer") - this app isn't
-     code-signed, so **right-click it and choose Open** instead (only needed once).
+     since this isn't code-signed - on newer macOS (Sequoia+) the dialog you get ("Apple
+     could not verify...") only offers **Done** / **Move to Bin**, no override button at
+     all, so the fix is Terminal, not a click-through:
+     ```bash
+     xattr -d com.apple.quarantine ~/Downloads/run-mac.command
+     ```
+     (adjust the path if you saved it somewhere other than Downloads - or after typing
+     `xattr -d com.apple.quarantine ` with a trailing space, drag the file from Finder into
+     the Terminal window to auto-fill the exact path). This only clears the "downloaded from
+     the internet" tag on this one file - it doesn't touch any system-wide security setting,
+     doesn't disable Gatekeeper in general, and doesn't affect any other file. A fresh
+     download (a future release) will need the same one-time fix, since quarantine is
+     re-applied automatically to anything newly downloaded. Once cleared, double-click the
+     file normally. Two alternatives if you'd rather not use Terminal, though less reliable
+     on recent macOS: right-click (Control-click) the file and choose **Open** instead of
+     double-clicking, which sometimes shows an actual **Open** button; or **System Settings
+     → Privacy & Security**, scroll down to the blocked-file notice, and click **Open
+     Anyway**.
    - **Windows**: double-click `run-windows.bat`. Windows SmartScreen (or your antivirus) may
      flag it the first time since it downloads and runs further code - choose **More info →
      Run anyway**. If your organisation's IT locks this down further, they may need to

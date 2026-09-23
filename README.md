@@ -4,6 +4,27 @@ Turns a customer's existing GRC spreadsheets (risk registers, issue logs, vendor
 lists, key business systems, control/resource libraries) into CyberHQ-ready import CSVs -
 with a human reviewing and approving the field mapping before anything is written.
 
+## Getting started
+
+No install, no Python, no git required - download one small file and run it:
+
+1. Go to the [latest release](https://github.com/AvertroJoe/Customer-Migration-Tool/releases/latest)
+   and download `run-mac.zip` (macOS) or `run-windows.zip` (Windows).
+2. Unzip it, then run the file inside:
+   - **macOS**: double-click `run-mac.command`. The first time, macOS will refuse to open it
+     ("cannot be opened because it is from an unidentified developer") - this app isn't
+     code-signed, so **right-click it and choose Open** instead (only needed once).
+   - **Windows**: double-click `run-windows.bat`. Windows SmartScreen (or your antivirus) may
+     flag it the first time since it downloads and runs further code - choose **More info →
+     Run anyway**. If your organisation's IT locks this down further, they may need to
+     allowlist the script.
+3. A terminal window opens, sets itself up (first run only - later runs are much faster),
+   and your browser opens on the app. Closing that terminal window stops the app.
+
+There's no desktop shortcut - just keep the downloaded file somewhere and run it again next
+time. It checks for updates on every launch and asks (a native pop-up, not silent) before
+applying one - see `launcher/bootstrap.py` if you want the details.
+
 ## How it works
 
 1. **Configure** - pick an LLM provider (Claude or Gemini) and add an API key on the
@@ -53,7 +74,10 @@ reason: a wrong guess here would be a wrong guess in every single row of the exp
 - Every source column must be accounted for - mapped, routed to a catch-all field, or
   explicitly confirmed as dropped - before a CSV is produced.
 
-## Setup
+## Developer setup
+
+For working on the code itself, rather than just running it - the "Getting started" section
+above is what to point regular users at.
 
 Requires Python 3.11+ (a version with a prebuilt `pydantic-core` wheel available - as of
 writing that means 3.11-3.13; 3.14 will fail to build `pydantic-core` from source).
@@ -128,6 +152,12 @@ be added the same way as they're supplied.
 
 ## Known limitations / not yet built
 
+- **`run-windows.bat` / the Windows launcher path is untested on real Windows.** The macOS
+  path (`run-mac.command`) has been verified end to end - real double-click, real first
+  install (Python + venv + dependencies via `uv`, server start, browser open), real fast-path
+  on a second launch. The Windows `.bat` has only been reviewed, not run, since there's no
+  Windows machine available here. Get a real test from a Windows user before pointing the
+  wider team at it.
 - **Gemini model choice matters more than expected.** With a real key, the full `-flash` and
   `-pro` tiers (`gemini-flash-latest`, `gemini-pro-latest`, etc.) either 503'd ("high demand")
   on a ~9k character prompt (the size of the old all-five-templates-at-once classify prompt,
@@ -193,4 +223,8 @@ backend/app/
 templates/               CyberHQ's own CSV/xlsx import templates (source of truth)
 frontend/static/         Single-page vanilla JS/HTML/CSS review UI (includes Settings panel)
 samples/                 Test spreadsheets (synthetic, since no real ones yet)
+launcher/
+  bootstrap.py             Self-updating launcher logic (see "Getting started") - stdlib-only
+  run-mac.command           Tiny macOS stub, published as a Release asset
+  run-windows.bat            Tiny Windows stub, published as a Release asset
 ```

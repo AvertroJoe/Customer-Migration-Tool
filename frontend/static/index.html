@@ -13,6 +13,38 @@
   </header>
 
   <main>
+    <!-- Settings: LLM provider + API key -->
+    <section class="card" id="settings-panel">
+      <div class="settings-header">
+        <h2>LLM provider settings</h2>
+        <button class="secondary" id="settings-toggle-btn" type="button">Change</button>
+      </div>
+      <div id="settings-summary"></div>
+
+      <div id="settings-form-wrap" class="hidden">
+        <div class="field-group">
+          <label for="provider-select">Provider</label>
+          <select id="provider-select">
+            <option value="anthropic">Claude (Anthropic)</option>
+            <option value="gemini">Gemini (Google)</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label for="api-key-input">API key</label>
+          <div class="key-input-row">
+            <input type="password" id="api-key-input" placeholder="Paste your API key" autocomplete="off" spellcheck="false" />
+            <button class="secondary" id="toggle-key-visibility-btn" type="button">Show</button>
+          </div>
+          <p class="hint" id="key-hint"></p>
+        </div>
+        <div class="row-actions">
+          <button class="secondary" id="test-key-btn" type="button">Test connection</button>
+          <button id="save-settings-btn" type="button">Save</button>
+        </div>
+        <div id="settings-status"></div>
+      </div>
+    </section>
+
     <!-- STEP 1: Upload -->
     <section class="card" id="upload-panel">
       <h2>1. Upload a customer spreadsheet</h2>

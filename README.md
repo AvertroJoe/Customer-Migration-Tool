@@ -6,15 +6,18 @@ with a human reviewing and approving the field mapping before anything is writte
 
 ## How it works
 
-1. **Upload** a customer spreadsheet (.csv or .xlsx, any sheet layout).
-2. **Classify** - Claude reads the column headers and a few sample rows and proposes which
-   CyberHQ template this sheet is (risk register, issue register, entity/vendor list, key
-   business systems, or resource/control library) and how each source column maps to a
-   target field, with a confidence score and a short rationale per column.
-3. **Review** - every suggestion is editable. Change the target template, remap any column,
+1. **Configure** - pick an LLM provider (Claude or Gemini) and add an API key on the
+   Settings panel at the top of the page. See "LLM provider settings" below.
+2. **Upload** a customer spreadsheet (.csv or .xlsx, any sheet layout).
+3. **Classify** - the configured LLM reads the column headers and a few sample rows and
+   proposes which CyberHQ template this sheet is (risk register, issue register,
+   entity/vendor list, key business systems, or resource/control library) and how each
+   source column maps to a target field, with a confidence score and a short rationale per
+   column.
+4. **Review** - every suggestion is editable. Change the target template, remap any column,
    choose a format conversion (date format, list delimiter, case), route leftover columns to
    a catch-all field, or leave columns unmapped.
-4. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
+5. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
    with nowhere to go, the tool stops and makes you explicitly confirm it should be dropped -
    it never discards data silently.
 
@@ -31,25 +34,18 @@ with a human reviewing and approving the field mapping before anything is writte
 
 ## Setup
 
-Requires Python 3.11+.
+Requires Python 3.11+ (a version with a prebuilt `pydantic-core` wheel available - as of
+writing that means 3.11-3.13; 3.14 will fail to build `pydantic-core` from source).
 
 ```bash
 cd grc-migration-tool
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
 ```
 
-Edit `.env` and add your own Anthropic API key:
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Get a key from the [Anthropic Console](https://console.anthropic.com/settings/keys). Treat it
-like a password - `.env` is git-ignored so it won't get committed, but never paste a live key
-into Slack, email, or a chat tool. If a key is ever pasted somewhere it shouldn't be, rotate it
-(revoke + generate a new one) in the console straight away.
+You don't need to touch `.env` by hand - the app creates and manages it for you from the
+Settings panel once it's running (see below). `.env.example` documents the variable names it
+uses, for reference only.
 
 ## Running it
 
@@ -58,6 +54,36 @@ uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 ```
 
 Then open http://127.0.0.1:8000 in a browser.
+
+## LLM provider settings
+
+The "LLM provider settings" panel at the top of the page lets each user bring their own key
+for either supported provider - nobody needs a shared or pre-provisioned key to use the tool:
+
+- **Claude (Anthropic)** - get a key from the
+  [Anthropic Console](https://console.anthropic.com/settings/keys).
+- **Gemini (Google)** - get a key from [Google AI Studio](https://aistudio.google.com/apikey).
+
+Pick a provider, paste a key, optionally hit **Test connection** (a cheap, non-generating
+call that just checks the key works), then **Save**. Both `classify_sheet` implementations
+(`backend/app/services/providers/anthropic_provider.py` and `.../gemini_provider.py`) are
+held to the exact same prompt and output schema (`.../shared.py`), so switching providers
+doesn't change the classification behaviour or the data-integrity rules below.
+
+Security practices this follows, given this is a local single-user tool with no other secret
+store available:
+
+- A key is validated (a real API call) **before** it's saved, so a typo or a revoked key
+  can't silently get persisted.
+- Keys are written only to `.env`, which is already git-ignored (see `.gitignore`) - a saved
+  key can never end up committed.
+- `.env` is written with owner-only file permissions (`chmod 600`) every time it's updated.
+- A key is never sent back to the browser in full once saved - the Settings panel only ever
+  shows a masked form (e.g. `sk-a********-...`), and the input field is cleared after every
+  save so nothing lingers in the page.
+- Treat a key like a password regardless: never paste one into Slack, email, or a chat tool.
+  If one ever ends up somewhere it shouldn't, rotate it (revoke + generate a new one) in that
+  provider's console straight away.
 
 ## Adding a new CyberHQ template or framework
 
@@ -81,6 +107,11 @@ be added the same way as they're supplied.
 
 ## Known limitations / not yet built
 
+- **Neither provider has run a live classification pass yet.** Both backends have been
+  verified against their real APIs with an invalid key (a clean auth error surfaces correctly
+  end to end via Settings and in the classify fallback banner), but nobody has yet supplied a
+  working key for either provider to confirm the classification prompt/schema actually
+  produces good mappings. See the open decisions list in `PROJECT_BRIEF.md`.
 - **Framework maturity assessments** (e.g. the NIST CSF template) are a different shape of
   problem to the other five templates: they're a fixed, ordered question list that a
   customer's own assessment/gap-analysis content needs to be *matched against* by meaning
@@ -106,14 +137,19 @@ be added the same way as they're supplied.
 
 ```
 backend/app/
-  main.py               FastAPI app + routes (upload, classify, export)
+  main.py               FastAPI app + routes (settings, upload, classify, export)
+  settings.py           Reads/writes .env for LLM provider + API key (see "LLM provider settings")
   template_registry.py  Scans templates/, builds the target schema for each one
   ingestion.py           Reads uploaded csv/xlsx into DataFrames
   state.py               In-memory session store
   services/
-    classifier.py         Calls Claude to classify + propose column mapping
+    classifier.py         Picks the configured provider and asks it to classify + propose a mapping
     exporter.py            Builds the final CSV from an approved mapping
+    providers/
+      shared.py             Provider-agnostic prompt + output schema (the actual data-integrity rules)
+      anthropic_provider.py Claude backend
+      gemini_provider.py    Gemini backend
 templates/               CyberHQ's own CSV/xlsx import templates (source of truth)
-frontend/static/         Single-page vanilla JS/HTML/CSS review UI
+frontend/static/         Single-page vanilla JS/HTML/CSS review UI (includes Settings panel)
 samples/                 Test spreadsheets (synthetic, since no real ones yet)
 ```

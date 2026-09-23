@@ -5,6 +5,7 @@ const state = {
   templates: { structural: [], framework_assessment: [] },
   currentTemplateKey: null,
   mappingRows: [], // {source_column, target_field, confidence, rationale, transform}
+  settings: { active_provider: null, providers: [] },
 };
 
 const CATCHALL_NAMES = ["other fields", "other field", "notes", "comments"];
@@ -32,6 +33,140 @@ async function init() {
   $("export-btn").addEventListener("click", () => attemptExport([]));
   $("confirm-drop-btn").addEventListener("click", onConfirmDrop);
   $("cancel-drop-btn").addEventListener("click", () => $("drop-confirm-panel").classList.add("hidden"));
+
+  $("settings-toggle-btn").addEventListener("click", () => toggleSettingsForm());
+  $("provider-select").addEventListener("change", onProviderSelectChange);
+  $("toggle-key-visibility-btn").addEventListener("click", toggleKeyVisibility);
+  $("test-key-btn").addEventListener("click", testApiKey);
+  $("save-settings-btn").addEventListener("click", saveSettings);
+
+  await loadSettings();
+}
+
+// ---------- Settings (LLM provider + API key) ----------
+
+const PROVIDER_KEY_HINTS = {
+  anthropic: "Starts with sk-ant-.",
+  gemini: "Starts with AIza.",
+};
+
+async function loadSettings() {
+  const res = await fetch("/api/settings");
+  state.settings = await res.json();
+  renderSettingsSummary();
+
+  // First run, nothing configured yet: open the form so it's obvious what to do.
+  const anyConfigured = state.settings.providers.some((p) => p.key_set);
+  if (!anyConfigured) {
+    toggleSettingsForm(true);
+  }
+
+  const preferred = state.settings.active_provider || state.settings.providers[0]?.provider;
+  $("provider-select").value = preferred;
+  onProviderSelectChange();
+}
+
+function providerInfo(providerKey) {
+  return state.settings.providers.find((p) => p.provider === providerKey);
+}
+
+function renderSettingsSummary() {
+  const summary = $("settings-summary");
+  const active = state.settings.active_provider;
+  const info = active ? providerInfo(active) : null;
+
+  if (!info || !info.key_set) {
+    summary.innerHTML = `<div class="settings-summary-line"><span class="pill warn">Not configured</span> Add an API key below to enable automatic classification.</div>`;
+    return;
+  }
+
+  summary.innerHTML = `
+    <div class="settings-summary-line">
+      <span class="pill ok">Configured</span>
+      <span class="provider-label">${info.label}</span>
+      <span class="masked-key">${info.key_masked}</span>
+    </div>`;
+}
+
+function toggleSettingsForm(forceOpen) {
+  const wrap = $("settings-form-wrap");
+  const open = forceOpen === true || (forceOpen === undefined && wrap.classList.contains("hidden"));
+  wrap.classList.toggle("hidden", !open);
+  $("settings-toggle-btn").textContent = open ? "Hide" : "Change";
+  if (open) {
+    $("api-key-input").value = "";
+    $("settings-status").innerHTML = "";
+  }
+}
+
+function onProviderSelectChange() {
+  const providerKey = $("provider-select").value;
+  const info = providerInfo(providerKey);
+  $("api-key-input").value = "";
+  $("api-key-input").placeholder = info?.key_set
+    ? `Currently saved: ${info.key_masked} — leave blank to keep it`
+    : "Paste your API key";
+
+  const hintParts = [PROVIDER_KEY_HINTS[providerKey] || ""];
+  if (info?.console_url) {
+    hintParts.push(`<a href="${info.console_url}" target="_blank" rel="noopener">Get a key</a>`);
+  }
+  $("key-hint").innerHTML = hintParts.filter(Boolean).join(" · ");
+}
+
+function toggleKeyVisibility() {
+  const input = $("api-key-input");
+  const btn = $("toggle-key-visibility-btn");
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  btn.textContent = showing ? "Show" : "Hide";
+}
+
+function currentSettingsPayload() {
+  return {
+    provider: $("provider-select").value,
+    api_key: $("api-key-input").value.trim() || undefined,
+  };
+}
+
+async function testApiKey() {
+  const provider = $("provider-select").value;
+  const apiKey = $("api-key-input").value.trim();
+  if (!apiKey) {
+    banner($("settings-status"), "error", "Paste a key first — there's nothing new to test.");
+    return;
+  }
+  banner($("settings-status"), "info", "Testing connection…");
+  const res = await fetch("/api/settings/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, api_key: apiKey }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    banner($("settings-status"), "error", `${err.detail || res.statusText}`);
+    return;
+  }
+  banner($("settings-status"), "ok", "Key works.");
+}
+
+async function saveSettings() {
+  const payload = currentSettingsPayload();
+  banner($("settings-status"), "info", "Saving…");
+  const res = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    banner($("settings-status"), "error", `${err.detail || res.statusText}`);
+    return;
+  }
+  state.settings = await res.json();
+  renderSettingsSummary();
+  banner($("settings-status"), "ok", "Saved.");
+  toggleSettingsForm(false);
 }
 
 async function uploadFile() {

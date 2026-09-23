@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import os
 import tempfile
 from pathlib import Path
 
@@ -11,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from app import ingestion, state
+from app import ingestion, settings, state
 from app.services import classifier as classifier_service
 from app.services import exporter as exporter_service
 from app.template_registry import (
@@ -21,15 +20,7 @@ from app.template_registry import (
     structural_templates,
 )
 
-# Load .env if python-dotenv-style file exists (kept dependency-free: tiny manual loader)
-_ENV_PATH = Path(__file__).resolve().parent.parent.parent / ".env"
-if _ENV_PATH.exists():
-    for line in _ENV_PATH.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
+settings.load_dotenv_into_environ()
 
 REGISTRY = load_registry()
 
@@ -61,6 +52,70 @@ def list_templates():
         "structural": [summarise(t) for t in structural_templates(REGISTRY).values()],
         "framework_assessment": [summarise(t) for t in framework_assessment_templates(REGISTRY).values()],
     }
+
+
+# ---------- Settings (LLM provider + API key) ----------
+
+@app.get("/api/settings")
+def get_settings():
+    return settings.get_status()
+
+
+class SettingsUpdate(BaseModel):
+    provider: str
+    api_key: str | None = None  # omit/blank to keep whatever key is already saved
+    model: str | None = None
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsUpdate):
+    provider = req.provider.strip().lower()
+    if provider not in settings.PROVIDER_INFO:
+        raise HTTPException(
+            400, f"Unknown provider '{provider}'. Choose one of: {', '.join(settings.PROVIDER_INFO)}."
+        )
+    info = settings.PROVIDER_INFO[provider]
+    current = settings.get_status()
+    already_has_key = next(p for p in current["providers"] if p["provider"] == provider)["key_set"]
+
+    api_key = (req.api_key or "").strip()
+    if not api_key and not already_has_key:
+        raise HTTPException(400, f"Enter a {info['label']} API key to enable this provider.")
+
+    updates = {"LLM_PROVIDER": provider}
+    if api_key:
+        # Validate before persisting, so a typo or a revoked key doesn't
+        # silently get saved and only surface as a failure later on.
+        try:
+            classifier_service.PROVIDERS[provider].test_key(api_key)
+        except Exception as e:
+            raise HTTPException(400, f"Could not verify this key with {info['label']}: {e}")
+        updates[info["key_env_var"]] = api_key
+    if req.model:
+        updates[info["model_env_var"]] = req.model.strip()
+
+    settings.write_env_values(updates)
+    return settings.get_status()
+
+
+class SettingsTestRequest(BaseModel):
+    provider: str
+    api_key: str
+
+
+@app.post("/api/settings/test")
+def test_settings(req: SettingsTestRequest):
+    provider = req.provider.strip().lower()
+    if provider not in settings.PROVIDER_INFO:
+        raise HTTPException(400, f"Unknown provider '{provider}'.")
+    api_key = req.api_key.strip()
+    if not api_key:
+        raise HTTPException(400, "Enter an API key to test.")
+    try:
+        classifier_service.PROVIDERS[provider].test_key(api_key)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 # ---------- Upload ----------

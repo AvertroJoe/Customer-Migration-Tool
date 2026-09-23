@@ -26,7 +26,7 @@ def _clean_error_message(e: Exception) -> str:
 LABEL = "Gemini (Google)"
 KEY_ENV_VAR = "GEMINI_API_KEY"
 MODEL_ENV_VAR = "GEMINI_MODEL"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-flash-lite-latest"
 
 
 def classify_sheet(

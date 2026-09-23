@@ -33,7 +33,7 @@ PROVIDER_INFO = {
         "label": "Gemini (Google)",
         "key_env_var": "GEMINI_API_KEY",
         "model_env_var": "GEMINI_MODEL",
-        "default_model": "gemini-2.5-flash",
+        "default_model": "gemini-flash-lite-latest",
         "console_url": "https://aistudio.google.com/apikey",
     },
 }

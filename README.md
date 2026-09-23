@@ -107,11 +107,16 @@ be added the same way as they're supplied.
 
 ## Known limitations / not yet built
 
-- **Neither provider has run a live classification pass yet.** Both backends have been
-  verified against their real APIs with an invalid key (a clean auth error surfaces correctly
-  end to end via Settings and in the classify fallback banner), but nobody has yet supplied a
-  working key for either provider to confirm the classification prompt/schema actually
-  produces good mappings. See the open decisions list in `PROJECT_BRIEF.md`.
+- **Gemini model choice matters more than expected.** With a real key, the full `-flash` and
+  `-pro` tiers (`gemini-flash-latest`, `gemini-pro-latest`, etc.) either 503'd
+  ("high demand") on our actual prompt size (~9k characters, once all five template
+  definitions are included) or hit a billing/quota wall - reproducible with generic filler
+  text of the same length, so it wasn't specific to our prompt content or schema. The
+  `-flash-lite` tier (default: `gemini-flash-lite-latest`) handled the same prompt reliably
+  and produced correctly-shaped, sensible mappings. If classification is failing on Gemini,
+  try a `-flash-lite` model via `GEMINI_MODEL` in Settings before assuming the prompt/schema
+  is broken. Claude hasn't yet been verified with a real key - see the open decisions list in
+  `PROJECT_BRIEF.md`.
 - **Framework maturity assessments** (e.g. the NIST CSF template) are a different shape of
   problem to the other five templates: they're a fixed, ordered question list that a
   customer's own assessment/gap-analysis content needs to be *matched against* by meaning

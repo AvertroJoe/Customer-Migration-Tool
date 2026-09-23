@@ -28,6 +28,7 @@ async function init() {
   const res = await fetch("/api/templates");
   state.templates = await res.json();
   $("upload-btn").addEventListener("click", uploadFile);
+  $("confirm-header-btn").addEventListener("click", confirmHeaderRow);
   $("suggest-template-btn").addEventListener("click", suggestTemplate);
   $("map-columns-btn").addEventListener("click", onMapColumns);
   $("change-template-btn").addEventListener("click", onChangeTemplate);
@@ -201,7 +202,7 @@ function renderSheetPicker() {
   picker.innerHTML = "";
   state.sheets.forEach((sheet) => {
     const btn = document.createElement("button");
-    btn.textContent = `${sheet.name} (${sheet.row_count} rows, ${sheet.columns.length} cols)`;
+    btn.textContent = `${sheet.name} (${sheet.row_count} rows, ${sheet.col_count} cols)`;
     btn.addEventListener("click", () => selectSheet(sheet.name));
     picker.appendChild(btn);
   });
@@ -213,8 +214,89 @@ function selectSheet(name) {
   document.querySelectorAll("#sheet-picker button").forEach((b) => {
     b.classList.toggle("active", b.textContent.startsWith(name));
   });
+  $("template-panel").classList.add("hidden");
   $("mapping-panel").classList.add("hidden");
   $("drop-confirm-panel").classList.add("hidden");
+  $("template-suggestion-banner").innerHTML = "";
+  $("header-row-status").innerHTML = "";
+  $("header-row-panel").classList.remove("hidden");
+  renderHeaderRowPreview();
+}
+
+function renderHeaderRowPreview() {
+  const sheet = state.currentSheet;
+  const wrap = $("header-row-preview");
+  const table = document.createElement("table");
+  const tbody = document.createElement("tbody");
+
+  sheet.preview_rows.forEach((cells, idx) => {
+    const rowNumber = idx + 1;
+    const tr = document.createElement("tr");
+    tr.dataset.row = String(rowNumber);
+    if (rowNumber === sheet.guessed_header_row) tr.classList.add("selected");
+
+    const radioTd = document.createElement("td");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "header-row";
+    radio.value = String(rowNumber);
+    radio.checked = rowNumber === sheet.guessed_header_row;
+    radioTd.appendChild(radio);
+
+    const numTd = document.createElement("td");
+    numTd.className = "row-number";
+    numTd.textContent = rowNumber;
+    if (rowNumber === sheet.guessed_header_row) {
+      const badge = document.createElement("span");
+      badge.className = "guessed-badge";
+      badge.textContent = "guessed";
+      numTd.appendChild(badge);
+    }
+
+    const cellsTd = document.createElement("td");
+    cellsTd.className = "row-cells";
+    cellsTd.textContent = cells.filter((c) => c !== "").join(" | ") || "(blank row)";
+
+    tr.append(radioTd, numTd, cellsTd);
+    tr.addEventListener("click", () => {
+      radio.checked = true;
+      wrap.querySelectorAll("tr").forEach((r) => r.classList.remove("selected"));
+      tr.classList.add("selected");
+    });
+    tbody.appendChild(tr);
+  });
+
+  table.appendChild(tbody);
+  wrap.innerHTML = "";
+  wrap.appendChild(table);
+}
+
+async function confirmHeaderRow() {
+  const checked = document.querySelector('input[name="header-row"]:checked');
+  if (!checked) {
+    banner($("header-row-status"), "error", "Pick a row first.");
+    return;
+  }
+  const headerRow = parseInt(checked.value, 10);
+
+  banner($("header-row-status"), "info", "Reading columns…");
+  const res = await fetch(`/api/sessions/${state.sessionId}/set-header`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sheet_name: state.currentSheet.name, header_row: headerRow }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    banner($("header-row-status"), "error", `${err.detail || res.statusText}`);
+    return;
+  }
+
+  const result = await res.json();
+  Object.assign(state.currentSheet, result); // adds columns + sample_rows
+  banner($("header-row-status"), "ok", `Using row ${headerRow} as the header — found ${result.columns.length} column(s), ${result.row_count} data row(s).`);
+
+  $("mapping-panel").classList.add("hidden");
   $("template-suggestion-banner").innerHTML = "";
   $("template-panel").classList.remove("hidden");
   populateTemplateSelect();

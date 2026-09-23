@@ -60,9 +60,21 @@
       <div class="sheet-picker" id="sheet-picker"></div>
     </section>
 
-    <!-- STEP 3: Pick target template -->
+    <!-- STEP 3: Confirm header row -->
+    <section class="card hidden" id="header-row-panel">
+      <h2>3. Confirm where the header row starts</h2>
+      <p>Some spreadsheets have a title or notes above the real column headers. We've guessed which
+        row that is below — click a different row if it's wrong.</p>
+      <div id="header-row-preview"></div>
+      <div class="row-actions">
+        <button id="confirm-header-btn" type="button">Use this header row</button>
+      </div>
+      <div id="header-row-status"></div>
+    </section>
+
+    <!-- STEP 4: Pick target template -->
     <section class="card hidden" id="template-panel">
-      <h2>3. Choose the CyberHQ template to migrate into</h2>
+      <h2>4. Choose the CyberHQ template to migrate into</h2>
       <div class="field-group">
         <label for="template-select">Target CyberHQ template</label>
         <select id="template-select"></select>
@@ -74,9 +86,9 @@
       <div id="template-suggestion-banner"></div>
     </section>
 
-    <!-- STEP 4: Mapping review -->
+    <!-- STEP 5: Mapping review -->
     <section class="card hidden" id="mapping-panel">
-      <h2>4. Review the proposed mapping</h2>
+      <h2>5. Review the proposed mapping</h2>
       <div class="row-actions" style="margin-bottom:.75rem;">
         <span>Mapping into: <strong id="mapping-target-label"></strong></span>
         <button class="secondary" id="change-template-btn" type="button">Change template</button>
@@ -106,7 +118,7 @@
       <div id="export-status"></div>
     </section>
 
-    <!-- STEP 4: Confirm drops -->
+    <!-- Confirm drops (shown mid-export, not a numbered step) -->
     <section class="card hidden" id="drop-confirm-panel">
       <h2>Some columns aren't mapped anywhere</h2>
       <p>These source columns have no target field and no catch-all selected. Nothing is dropped without your say-so:</p>

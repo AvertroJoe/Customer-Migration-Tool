@@ -141,3 +141,27 @@ footer.note { color: var(--muted); font-size: .78rem; margin-top: 2rem; }
 
 .hint { color: var(--muted); font-size: .78rem; margin: .35rem 0 0 0; }
 .hint a { color: var(--accent); }
+
+#header-row-preview table { margin-bottom: 1rem; }
+#header-row-preview tr { cursor: pointer; }
+#header-row-preview tr:hover td { background: #f5f7fa; }
+#header-row-preview tr.selected td { background: #eaf2fd; }
+#header-row-preview td.row-number { color: var(--muted); font-variant-numeric: tabular-nums; width: 2.5rem; }
+#header-row-preview td.row-cells {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 640px;
+}
+#header-row-preview .guessed-badge {
+  display: inline-block;
+  margin-left: .5rem;
+  padding: .05rem .4rem;
+  border-radius: 4px;
+  font-size: .68rem;
+  font-weight: 600;
+  background: #e6f4ea;
+  color: var(--ok);
+}

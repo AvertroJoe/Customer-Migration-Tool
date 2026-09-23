@@ -10,18 +10,37 @@ with a human reviewing and approving the field mapping before anything is writte
    Settings panel at the top of the page. See "LLM provider settings" below.
 2. **Upload** a customer spreadsheet (.csv or .xlsx, any sheet layout) and pick the sheet to
    migrate.
-3. **Choose the target template** - risk register, issue register, entity/vendor list, key
+3. **Confirm the header row** - see "Header row detection" below. Real files often have a
+   title or notes row above the real headers; the tool guesses where the real header starts
+   and the reviewer confirms (or picks a different row) before anything else happens.
+4. **Choose the target template** - risk register, issue register, entity/vendor list, key
    business systems, or resource/control library. The reviewer picks this, since they
    already know what the file is; not sure? "Suggest a template" asks the LLM to guess from
    the column headers and sample rows, as an optional aid rather than the default path.
-4. **Map** - once the target template is set, the configured LLM proposes how each source
+5. **Map** - once the target template is set, the configured LLM proposes how each source
    column maps to a target field, with a confidence score and a short rationale per column.
    Every suggestion is editable: remap any column, choose a format conversion (date format,
    list delimiter, case), route leftover columns to a catch-all field, or leave columns
    unmapped.
-5. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
+6. **Export** - once you're happy, generate the CSV. If any source column is left unmapped
    with nowhere to go, the tool stops and makes you explicitly confirm it should be dropped -
    it never discards data silently.
+
+## Header row detection
+
+Real customer spreadsheets often aren't headers-first - a common pattern is a free-text
+title or instructions row (sometimes two, plus a blank spacer) before the real column
+headers start. Assuming row 1 is always the header would silently corrupt every mapping on
+files shaped like that.
+
+Instead, `backend/app/ingestion.py`'s `guess_header_row()` scans the first 20 rows of the raw
+sheet and guesses which one is the real header: a title row is typically narrow (one or two
+populated cells, the rest blank), while the real header row is close to the sheet's full
+width and is followed by more rows of similar width. That guess is never applied silently -
+the reviewer sees a preview of the top of the sheet with the guessed row highlighted, and
+either confirms it or clicks a different row (`POST /api/sessions/{id}/set-header`). This
+follows the same human-confirms-the-guess pattern as template selection, for the same
+reason: a wrong guess here would be a wrong guess in every single row of the export.
 
 ## Data integrity, by design
 
@@ -120,13 +139,20 @@ be added the same way as they're supplied.
   failing, try a `-flash-lite` model via `GEMINI_MODEL` in Settings before assuming the
   prompt/schema is broken. Claude hasn't yet been verified with a real key - see the open
   decisions list in `PROJECT_BRIEF.md`.
-- **Column mapping now requires the reviewer to pick the target template first** (step 3
+- **Column mapping now requires the reviewer to pick the target template first** (step 4
   above) rather than having the LLM guess it as part of every mapping call. This shrinks the
   mapping prompt to one template's fields instead of all five (directly avoiding the size
   issue above on the default path) and removes template misclassification as a failure mode,
   since the reviewer usually already knows what kind of file they're migrating. The "Suggest
   a template" button is a separate, opt-in call for when they don't - it still sends every
   candidate template, so it inherits the model-choice caveat above.
+- **Header row detection is a heuristic, not a guarantee** (see "Header row detection"
+  above). It's been verified against a real file with a title row + blank spacer above the
+  header (correctly guessed row 3), but hasn't been tried against trickier shapes - multiple
+  title rows, merged cells, a sheet where the header itself is sparse (few populated cells).
+  The reviewer always confirms the guess before anything downstream happens, so a wrong guess
+  is corrected, never silently applied - but it may need more clicks on messier files than
+  on this one.
 - **Framework maturity assessments** (e.g. the NIST CSF template) are a different shape of
   problem to the other five templates: they're a fixed, ordered question list that a
   customer's own assessment/gap-analysis content needs to be *matched against* by meaning
@@ -155,8 +181,8 @@ backend/app/
   main.py               FastAPI app + routes (settings, upload, classify, export)
   settings.py           Reads/writes .env for LLM provider + API key (see "LLM provider settings")
   template_registry.py  Scans templates/, builds the target schema for each one
-  ingestion.py           Reads uploaded csv/xlsx into DataFrames
-  state.py               In-memory session store
+  ingestion.py           Reads uploaded csv/xlsx as raw rows, guesses + builds the header row
+  state.py               In-memory session store (raw rows until header confirmed, then a DataFrame)
   services/
     classifier.py         Picks the configured provider and asks it to classify + propose a mapping
     exporter.py            Builds the final CSV from an approved mapping

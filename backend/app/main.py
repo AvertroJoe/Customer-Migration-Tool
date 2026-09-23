@@ -131,29 +131,76 @@ async def upload(file: UploadFile = File(...)):
         tmp_path = Path(tmp.name)
 
     try:
-        sheets = ingestion.read_sheets(tmp_path)
+        raw_sheets = ingestion.read_raw_sheets(tmp_path)
     except Exception as e:
         raise HTTPException(400, f"Could not read file: {e}")
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    if not sheets:
+    if not raw_sheets:
         raise HTTPException(400, "No non-empty sheets found in this file.")
 
-    session = state.create_session(source_filename=file.filename, sheets=sheets)
+    session = state.create_session(source_filename=file.filename, raw_sheets=raw_sheets)
 
     sheet_summaries = []
-    for name, df in sheets.items():
+    for name, rows in raw_sheets.items():
         sheet_summaries.append(
             {
                 "name": name,
-                "columns": list(df.columns),
-                "row_count": len(df),
-                "sample_rows": df.head(5).to_dict(orient="records"),
+                "row_count": len(rows),
+                "col_count": max((len(r) for r in rows), default=0),
+                # 1-indexed to match how the reviewer sees row numbers in
+                # their own spreadsheet - confirmed via /set-header below.
+                "guessed_header_row": ingestion.guess_header_row(rows) + 1,
+                "preview_rows": rows[:12],
             }
         )
 
     return {"session_id": session.id, "source_filename": file.filename, "sheets": sheet_summaries}
+
+
+class SetHeaderRequest(BaseModel):
+    sheet_name: str
+    header_row: int  # 1-indexed, as shown to the reviewer in the preview
+
+
+@app.post("/api/sessions/{session_id}/set-header")
+def set_header(session_id: str, req: SetHeaderRequest):
+    """Confirms which raw row is the real header for a sheet, turning it
+    into the DataFrame classify/export operate on. See ingestion.py -
+    nothing guesses this without the reviewer confirming it here first."""
+    session = state.get_session(session_id)
+    if not session:
+        raise HTTPException(404, "Session not found or expired.")
+    if req.sheet_name not in session.raw_sheets:
+        raise HTTPException(404, f"Sheet '{req.sheet_name}' not found in this session.")
+
+    rows = session.raw_sheets[req.sheet_name]
+    try:
+        df = ingestion.build_dataframe(rows, req.header_row - 1)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    if df.empty:
+        raise HTTPException(400, "No data rows found beneath that header row - pick a different row.")
+
+    session.sheets[req.sheet_name] = df
+    return {
+        "columns": list(df.columns),
+        "row_count": len(df),
+        "sample_rows": df.head(5).to_dict(orient="records"),
+    }
+
+
+def _get_confirmed_sheet(session: state.Session, sheet_name: str):
+    """Look up a sheet's DataFrame, distinguishing "no such sheet" from
+    "this sheet exists but the header row hasn't been confirmed yet" -
+    classify/suggest-template/export all need exactly this check."""
+    if sheet_name not in session.raw_sheets:
+        raise HTTPException(404, f"Sheet '{sheet_name}' not found in this session.")
+    if sheet_name not in session.sheets:
+        raise HTTPException(400, f"Confirm the header row for sheet '{sheet_name}' first (see /set-header).")
+    return session.sheets[sheet_name]
 
 
 # ---------- Classification ----------
@@ -168,15 +215,13 @@ def classify(session_id: str, req: ClassifyRequest):
     session = state.get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found or expired.")
-    if req.sheet_name not in session.sheets:
-        raise HTTPException(404, f"Sheet '{req.sheet_name}' not found in this session.")
+    df = _get_confirmed_sheet(session, req.sheet_name)
 
     candidates = structural_templates(REGISTRY)
     if req.template_key not in candidates:
         raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
     target = candidates[req.template_key]
 
-    df = session.sheets[req.sheet_name]
     try:
         result = classifier_service.classify_sheet(
             sheet_name=req.sheet_name,
@@ -203,10 +248,7 @@ def suggest_template(session_id: str, req: SuggestTemplateRequest):
     session = state.get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found or expired.")
-    if req.sheet_name not in session.sheets:
-        raise HTTPException(404, f"Sheet '{req.sheet_name}' not found in this session.")
-
-    df = session.sheets[req.sheet_name]
+    df = _get_confirmed_sheet(session, req.sheet_name)
     candidates = structural_templates(REGISTRY)
 
     try:
@@ -247,13 +289,11 @@ def export(session_id: str, req: ExportRequest):
     session = state.get_session(session_id)
     if not session:
         raise HTTPException(404, "Session not found or expired.")
-    if req.sheet_name not in session.sheets:
-        raise HTTPException(404, f"Sheet '{req.sheet_name}' not found in this session.")
+    df = _get_confirmed_sheet(session, req.sheet_name)
     target = REGISTRY.get(req.template_key)
     if not target:
         raise HTTPException(400, f"Unknown template_key '{req.template_key}'")
 
-    df = session.sheets[req.sheet_name]
     mapping = [
         exporter_service.MappingRow(m.source_column, m.target_field, m.transform) for m in req.mapping
     ]

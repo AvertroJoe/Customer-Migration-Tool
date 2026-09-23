@@ -21,15 +21,20 @@ import pandas as pd
 class Session:
     id: str
     source_filename: str
+    # Every uploaded sheet as raw rows, header row unknown - see ingestion.py.
+    raw_sheets: dict[str, list[list[str]]] = field(default_factory=dict)
+    # Only sheets whose header row the reviewer has confirmed (POST
+    # .../set-header) end up here, as an actual DataFrame with real column
+    # names. classify/export operate on this, never on raw_sheets directly.
     sheets: dict[str, pd.DataFrame] = field(default_factory=dict)
 
 
 _sessions: dict[str, Session] = {}
 
 
-def create_session(source_filename: str, sheets: dict[str, pd.DataFrame]) -> Session:
+def create_session(source_filename: str, raw_sheets: dict[str, list[list[str]]]) -> Session:
     session_id = uuid.uuid4().hex[:12]
-    session = Session(id=session_id, source_filename=source_filename, sheets=sheets)
+    session = Session(id=session_id, source_filename=source_filename, raw_sheets=raw_sheets)
     _sessions[session_id] = session
     return session
 

@@ -149,6 +149,19 @@ uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
 
 Then open http://127.0.0.1:8000 in a browser.
 
+## Running tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+No API key or network access needed - every LLM call is mocked at the `app.services.classifier`
+boundary (see `tests/test_providers.py`/`tests/test_api.py`). Runs the same way in CI
+(`.github/workflows/tests.yml`, on every push/PR to `main`) as it does locally. See
+`tests/` for what's covered - unit tests for header-row detection, the exporter's value-mapping
+logic (issue #9), and template parsing; mocked provider/API-level tests on top of that.
+
 ## LLM provider settings
 
 The "LLM provider settings" panel at the top of the page lets each user bring their own key
